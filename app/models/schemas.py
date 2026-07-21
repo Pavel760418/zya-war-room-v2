@@ -1,53 +1,84 @@
-from typing import List, Optional, Literal
-from pydantic import BaseModel
+"""DTO-схемы дашборда.
 
-StatusColor = Literal['green','yellow','red','blue','neutral']
-RiskLevel = Literal['low','medium','high']
-Period = Literal['day','week','month']
-Scope = Literal['network','store']
+Реализованы на стандартных ``dataclasses`` (без внешних зависимостей), чтобы
+Streamlit-деплой не требовал ``pydantic``/``pydantic-core`` (Rust-сборка, которая
+ломается на новых Python в Streamlit Cloud). Метод ``model_dump()`` сохранён для
+обратной совместимости — и FastAPI-роуты, и Streamlit-UI вызывают его как раньше.
 
-class KPI(BaseModel):
+Все поля — keyword-only (``kw_only=True``), поэтому порядок объявления не важен, а
+``MetricsService`` создаёт объекты по именованным аргументам, как и прежде.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import List, Literal, Optional
+
+StatusColor = Literal['green', 'yellow', 'red', 'blue', 'neutral']
+RiskLevel = Literal['low', 'medium', 'high']
+Period = Literal['day', 'week', 'month']
+Scope = Literal['network', 'store']
+
+
+class _Model:
+    """Общий миксин: даёт ``model_dump()`` поверх ``dataclasses.asdict`` (рекурсивно)."""
+
+    def model_dump(self) -> dict:
+        return asdict(self)  # type: ignore[arg-type]
+
+
+@dataclass(kw_only=True)
+class KPI(_Model):
     code: str
     label: str
     value: float
     unit: str
+    status_color: StatusColor
     plan: Optional[float] = None
     py: Optional[float] = None
     delta_abs: Optional[float] = None
     delta_pct: Optional[float] = None
     yoy: Optional[float] = None
-    status_color: StatusColor
     hint: Optional[str] = None
 
-class AlertItem(BaseModel):
+
+@dataclass(kw_only=True)
+class AlertItem(_Model):
     type: str
     title: str
-    store: Optional[str] = None
     severity: StatusColor
     metric: str
     value: float
+    store: Optional[str] = None
     comment: Optional[str] = None
 
-class ActionItem(BaseModel):
-    priority: Literal['P1','P2','P3']
+
+@dataclass(kw_only=True)
+class ActionItem(_Model):
+    priority: Literal['P1', 'P2', 'P3']
     title: str
     owner: str
     eta: str
     status_color: StatusColor
     rationale: str
 
-class LossItem(BaseModel):
+
+@dataclass(kw_only=True)
+class LossItem(_Model):
     group: str
     amount: float
     pct_rto: float
     status_color: StatusColor
 
-class StoreRow(BaseModel):
+
+@dataclass(kw_only=True)
+class StoreRow(_Model):
     store: str
+    revenue: float
+    status_color: StatusColor
+    risk_level: RiskLevel
     region: Optional[str] = None
     cluster: Optional[str] = None
     format: Optional[str] = None
-    revenue: float
     plan: Optional[float] = None
     py: Optional[float] = None
     plan_pct: Optional[float] = None
@@ -61,10 +92,10 @@ class StoreRow(BaseModel):
     stock_plan: Optional[float] = None
     losses: Optional[float] = None
     inventory_shortage: Optional[float] = None
-    status_color: StatusColor
-    risk_level: RiskLevel
 
-class StoreDrilldown(BaseModel):
+
+@dataclass(kw_only=True)
+class StoreDrilldown(_Model):
     store: str
     summary: StoreRow
     day_kpis: List[KPI]
@@ -74,7 +105,9 @@ class StoreDrilldown(BaseModel):
     local_risks: List[AlertItem]
     actions: List[ActionItem]
 
-class DashboardResponse(BaseModel):
+
+@dataclass(kw_only=True)
+class DashboardResponse(_Model):
     period: Period
     scope: Scope
     mode: str
@@ -90,10 +123,12 @@ class DashboardResponse(BaseModel):
     store_table: List[StoreRow]
     losses: List[LossItem]
     charts: dict
-    drilldown: Optional[StoreDrilldown] = None
     meta: dict
+    drilldown: Optional[StoreDrilldown] = None
 
-class FiltersResponse(BaseModel):
+
+@dataclass(kw_only=True)
+class FiltersResponse(_Model):
     periods: List[str]
     stores: List[str]
     regions: List[str]

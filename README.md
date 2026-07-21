@@ -51,19 +51,28 @@ streamlit run streamlit_app.py     # откроется http://localhost:8501
 ### Деплой в Streamlit Community Cloud
 1. Запушить репозиторий в GitHub.
 2. На share.streamlit.io выбрать репозиторий и указать **Main file: `streamlit_app.py`**.
-3. Зависимости берутся из `requirements.txt` (минимальный набор без FastAPI/тестов),
-   тема — из `.streamlit/config.toml`. Рекомендуемая версия Python — **3.12**
-   (выбирается в Advanced settings при создании приложения).
+3. Зависимости берутся из `requirements.txt` (минимальный набор, **без** FastAPI,
+   тестов и `pydantic`), тема — из `.streamlit/config.toml`.
+4. **Python:** рекомендуется выбрать **3.13** (или 3.12) в Advanced settings.
+
+> **Про Python 3.14.** Ранее деплой падал на сборке `pydantic-core` (Rust/PyO3),
+> который не собирается на новых Python без готовых wheels. Теперь DTO переведены
+> на `dataclasses`, и **`pydantic` из Streamlit-зависимостей удалён** — Rust-сборки
+> нет вовсе. Остальные пакеты заданы диапазонами, чтобы Streamlit Cloud поставил
+> готовые wheels под свою версию Python. Для максимальной надёжности (готовые
+> wheels для `pyarrow`/`pandas`/`numpy`) выбирайте **Python 3.13**.
 
 ### Файлы зависимостей
-- `requirements.txt` — **только для Streamlit** (Streamlit Cloud использует его).
-- `requirements-fastapi.txt` — зависимости FastAPI-версии (`app/main.py`).
+- `requirements.txt` — **только для Streamlit** (Streamlit Cloud использует его). Без `pydantic`.
+- `requirements-fastapi.txt` — зависимости FastAPI-версии (`app/main.py`); включает `pydantic`.
 - `requirements-dev.txt` — полное dev-окружение (Streamlit + FastAPI + `pytest`).
 
 ## Архитектура (reusable-слои)
 - `app/ingestion/` — устойчивая загрузка Excel: `schema` (словарь листов/колонок и
   алиасов), `excel_loader` (data_loading), `data_mapping`, `data_validation`,
-  `error_handling`, `pipeline` (оркестратор), `sample_inputs` (фикстуры).
+  `error_handling`, `pipeline` (оркестратор), `sample_inputs` (фикстуры),
+  `template` (генерация Excel-шаблона).
+- `app/models/schemas.py` — DTO на `dataclasses` (без pydantic) с методом `model_dump()`.
 - `app/services/metrics_service.py` — бизнес-метрики (общие для FastAPI и Streamlit).
 - `app/streamlit_ui/` — слой отображения: `theme`, `formatting`, `render`, `charts`,
   `views`, `diagnostics`, `data_access`.
