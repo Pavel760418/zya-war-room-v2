@@ -1,0 +1,15 @@
+# Python virtual environment (platform-specific, must not be committed)
+.venv/
+venv/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# IDE
+.idea/
+
+# OS
+.DS_Store

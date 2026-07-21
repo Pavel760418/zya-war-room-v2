@@ -185,7 +185,7 @@ class MetricsService:
                 alerts.append(AlertItem(type='risk', title='Высокие потери', store=row.store, severity='yellow', metric='losses_pct', value=round((row.losses or 0)/max(row.revenue,0.01)*100,2), comment='Потери выше допустимого уровня'))
             if (row.own_production_share_pct or 0) < 30:
                 alerts.append(AlertItem(type='risk', title='Просадка собственного производства', store=row.store, severity='red', metric='own_share', value=float(row.own_production_share_pct or 0), comment='Низкая доля СП ухудшает экономику магазина'))
-        drill_target = summary_rows[0] if len(summary_rows)==1 else bottom[0]
+        drill_target = summary_rows[0] if len(summary_rows)==1 else (bottom[0] if bottom else None)
         drilldown = self.build_drilldown(drill_target) if drill_target else None
         charts = {
             'plan_vs_store': [{'store': r.store, 'plan_pct': r.plan_pct, 'status_color': r.status_color} for r in summary_rows],

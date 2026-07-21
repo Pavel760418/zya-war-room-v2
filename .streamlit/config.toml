@@ -1,0 +1,17 @@
+# Тема Streamlit подобрана под тёмный дизайн War Room (бирюзовые акценты).
+# Основную стилизацию задаёт CSS в app/streamlit_ui/theme.py; эти значения
+# синхронизируют встроенные виджеты Streamlit с общей палитрой.
+[theme]
+base = "dark"
+primaryColor = "#43d7c2"
+backgroundColor = "#0b100f"
+secondaryBackgroundColor = "#151f1b"
+textColor = "#edf4ef"
+font = "sans serif"
+
+[server]
+headless = true
+runOnSave = true
+
+[browser]
+gatherUsageStats = false
