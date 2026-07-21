@@ -11,10 +11,12 @@ This repo contains **two front-ends over one shared business core** (ZYA War Roo
 
 ### Dependencies (split for a clean Streamlit Cloud deploy)
 
-- `requirements.txt` — **Streamlit only** (streamlit, pandas, numpy, openpyxl, plotly, pydantic). This is what Streamlit Community Cloud installs (Main file: `streamlit_app.py`). Do NOT add FastAPI/uvicorn/pytest here — they are unnecessary for the Streamlit app and bloat/risk the deploy.
-- `requirements-fastapi.txt` — FastAPI extras (`-r requirements.txt` + fastapi/uvicorn/python-multipart).
+- `requirements.txt` — **Streamlit only** (streamlit, pandas, numpy, openpyxl, plotly). Versions are **ranges**, not hard pins, so Streamlit Cloud installs prebuilt wheels for whatever Python it runs. This is what Streamlit Community Cloud installs (Main file: `streamlit_app.py`). Do NOT add FastAPI/uvicorn/pytest/pydantic here.
+- **No `pydantic` in the Streamlit deps.** DTOs in `app/models/schemas.py` are stdlib `dataclasses` with a `model_dump()` method. This is deliberate: `pydantic-core` is a Rust build that fails on newer Python (e.g. 3.14) in Streamlit Cloud. Keep schemas pydantic-free. `pydantic` lives only in `requirements-fastapi.txt` (FastAPI itself needs it).
+- **Streamlit Cloud Python version:** recommend **3.13** (or 3.12) in Advanced settings — widest wheel coverage for `pyarrow`/`pandas`/`numpy`. 3.14 may work via ranges but wheel availability for the whole stack is not guaranteed.
+- `requirements-fastapi.txt` — FastAPI extras (`-r requirements.txt` + fastapi/uvicorn/python-multipart/pydantic).
 - `requirements-dev.txt` — full dev env (`-r requirements-fastapi.txt` + pytest). The VM update script installs this when present.
-- The Streamlit import chain does not import FastAPI (verified), so the two apps are isolated.
+- The Streamlit import chain does not import FastAPI or pydantic (verified), so the two apps are isolated and the deploy has no Rust build.
 
 ### Services
 
