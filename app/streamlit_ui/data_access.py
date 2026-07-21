@@ -14,10 +14,19 @@ from app.core.config import DEFAULT_EXCEL_FILE
 from app.ingestion import IngestionResult, ingest_excel
 from app.ingestion.error_handling import IngestionReport, Severity, safe_call
 from app.ingestion.schema import SCHEMA
+from app.ingestion.template import build_excel_template, template_filename
 from app.repositories.demo_repository import DemoRepository
 from app.services.metrics_service import MetricsService
 
-__all__ = ["load_excel_result", "load_demo_raw", "build_dashboard_safe", "available_filters", "empty_raw"]
+__all__ = [
+    "load_excel_result",
+    "load_demo_raw",
+    "build_dashboard_safe",
+    "available_filters",
+    "empty_raw",
+    "get_template_bytes",
+    "get_template_filename",
+]
 
 _DEFAULT_FILTERS = {"periods": ["day", "week", "month"], "stores": [], "regions": [], "clusters": [], "formats": []}
 
@@ -63,6 +72,16 @@ def load_excel_result(uploaded_bytes: Optional[bytes], filename: Optional[str]) 
 def load_demo_raw(seed: int = 42, stores_count: int = 24) -> dict:
     """Сгенерировать demo-данные (сеть магазинов)."""
     return DemoRepository(seed=seed, stores_count=stores_count).load()
+
+
+@st.cache_data(show_spinner=False)
+def get_template_bytes() -> bytes:
+    """Сгенерировать (и закэшировать) .xlsx-шаблон для скачивания."""
+    return build_excel_template()
+
+
+def get_template_filename() -> str:
+    return template_filename()
 
 
 def available_filters(raw: dict, mode: str) -> dict:

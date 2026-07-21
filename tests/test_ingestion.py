@@ -20,6 +20,7 @@ from app.ingestion.sample_inputs import (
     build_unreadable_bytes,
     default_excel_path,
 )
+from app.ingestion.template import build_excel_template, template_filename
 from app.ingestion.text_utils import normalize, similarity
 from app.services.metrics_service import MetricsService
 
@@ -124,6 +125,26 @@ def test_unreadable_file_is_fatal_but_safe():
     assert dash.store_table == []
     assert dash.drilldown is None
     assert len(dash.kpis) == 5
+
+
+def test_generated_template_is_ingestible():
+    data = build_excel_template()
+    assert template_filename().endswith(".xlsx")
+    assert isinstance(data, (bytes, bytearray)) and len(data) > 0
+    res = ingest_excel(data, filename=template_filename())
+    assert res.ok is True
+    assert res.has_store_data is True
+    assert res.report.status == Severity.SUCCESS
+    dash = MetricsService(res.raw, mode="excel").build_dashboard(period="month")
+    assert len(dash.store_table) >= 1
+
+
+def test_empty_bytes_do_not_crash():
+    res = ingest_excel(b"", filename="empty.xlsx")
+    assert res.ok is False
+    assert res.report.fatal is True
+    dash = MetricsService(res.raw, mode="excel").build_dashboard(period="week")
+    assert dash.store_table == []
 
 
 def test_missing_columns_get_safe_defaults():

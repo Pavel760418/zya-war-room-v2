@@ -15,6 +15,8 @@ import streamlit as st
 from app.streamlit_ui.data_access import (
     available_filters,
     build_dashboard_safe,
+    get_template_bytes,
+    get_template_filename,
     load_demo_raw,
     load_excel_result,
 )
@@ -56,7 +58,7 @@ with st.sidebar:
     mode = "demo" if mode_label == "Demo random" else "excel"
 
     if mode == "excel":
-        uploaded = st.file_uploader("Загрузить исходный Excel (.xlsx)", type=["xlsx", "xls"])
+        uploaded = st.file_uploader("Загрузить исходный Excel (.xlsx)", type=["xlsx"])
         if uploaded is not None:
             ss.uploaded_bytes = uploaded.getvalue()
             ss.uploaded_name = uploaded.name
@@ -68,6 +70,16 @@ with st.sidebar:
                 st.rerun()
         else:
             st.caption("Файл не загружен — используется эталонный пилотный Excel.")
+
+    # Скачиваемый Excel-шаблон для ручного заполнения менеджерами.
+    st.download_button(
+        "⬇️ Скачать шаблон Excel",
+        data=get_template_bytes(),
+        file_name=get_template_filename(),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        help="Готовый .xlsx с нужными листами, заголовками и примерами строк.",
+    )
 
     st.divider()
     st.caption(
@@ -96,6 +108,14 @@ if nav == "Диагностика загрузки":
         st.info("Диагностика доступна для режима Excel pilot. В demo-режиме данные генерируются программно.")
     elif report is not None:
         render_full_diagnostics(report)
+        st.divider()
+        st.caption("Нужен корректный формат? Скачайте готовый шаблон и заполните его.")
+        st.download_button(
+            "⬇️ Скачать шаблон Excel",
+            data=get_template_bytes(),
+            file_name=get_template_filename(),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
     st.stop()
 
 
