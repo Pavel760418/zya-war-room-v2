@@ -1,0 +1,6 @@
+# Зависимости оригинальной FastAPI-версии (app/main.py).
+# НЕ нужны для Streamlit Cloud. Установка: pip install -r requirements-fastapi.txt
+-r requirements.txt
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9

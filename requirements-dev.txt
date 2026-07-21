@@ -1,0 +1,4 @@
+# Полное окружение для разработки: Streamlit + FastAPI + тесты.
+# Установка: pip install -r requirements-dev.txt
+-r requirements-fastapi.txt
+pytest==8.3.4
