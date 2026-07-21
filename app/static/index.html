@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Operational Cockpit v2</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root,[data-theme='light']{--bg:#f6f7f4;--surface:#fff;--surface-2:#f0f3ef;--surface-3:#e8eeea;--text:#1d241f;--muted:#6d776f;--border:rgba(29,36,31,.12);--primary:#11897d;--success:#2f8f4e;--warning:#c58c12;--error:#c94f4f;--blue:#3076d6;--shadow:0 12px 30px rgba(10,20,14,.08)}
+    [data-theme='dark']{--bg:#0b100f;--surface:#111816;--surface-2:#151f1b;--surface-3:#1b2621;--text:#edf4ef;--muted:#9baaa0;--border:rgba(237,244,239,.10);--primary:#43d7c2;--success:#44c06c;--warning:#f1b84a;--error:#ff6c6c;--blue:#5ea5ff;--shadow:0 16px 36px rgba(0,0,0,.34)}
+    *{box-sizing:border-box} html,body{margin:0} body{font-family:Inter,sans-serif;background:radial-gradient(circle at top left, rgba(67,215,194,.12), transparent 20%), var(--bg);color:var(--text)}
+    .page{max-width:1700px;margin:0 auto;padding:20px}.grid{display:grid;gap:16px}.top{grid-template-columns:1.45fr .9fr}.panel,.card{background:linear-gradient(180deg,var(--surface),var(--surface-2));border:1px solid var(--border);border-radius:26px;box-shadow:var(--shadow)}
+    .panel{padding:24px}.hero h1{margin:0 0 10px;font-size:34px;line-height:1.04}.hero p{margin:0;color:var(--muted);max-width:90ch}.hero-meta{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:18px}.meta-box{padding:14px 16px;border:1px solid var(--border);border-radius:18px;background:rgba(255,255,255,.02)}.meta-box .k{font-size:12px;color:var(--muted);margin-bottom:6px}.meta-box .v{font-size:18px;font-weight:800}
+    .side{display:flex;flex-direction:column;gap:14px}.pill{display:inline-flex;padding:10px 14px;border-radius:999px;background:rgba(67,215,194,.14);color:var(--primary);font-weight:800}.controls{display:grid;grid-template-columns:auto auto 220px 180px 180px 180px auto;gap:12px;align-items:center;margin:16px 0}.segment{display:flex;gap:8px;flex-wrap:wrap}
+    .btn,.select{height:44px;border:1px solid var(--border);border-radius:14px;background:var(--surface);color:var(--text);padding:0 14px}.btn{font-weight:700;cursor:pointer}.btn.active{background:rgba(67,215,194,.14);border-color:rgba(67,215,194,.35);color:var(--primary)}
+    .kpis{grid-template-columns:repeat(5,1fr)}.card{padding:18px}.metric-label{font-size:12px;color:var(--muted);margin-bottom:8px}.metric-value{font-size:34px;font-weight:800;letter-spacing:-.03em}.metric-sub{font-size:13px;color:var(--muted);margin-top:8px}.green{color:var(--success)}.yellow{color:var(--warning)}.red{color:var(--error)}.blue{color:var(--blue)}
+    .main{grid-template-columns:1.15fr .85fr;margin-top:16px}.section-title{font-size:18px;font-weight:800;margin:0 0 12px}.subtle{font-size:13px;color:var(--muted)}.list{display:grid;gap:10px}.alert,.action,.rank{display:flex;justify-content:space-between;gap:12px;padding:12px 14px;border-radius:16px;border:1px solid var(--border);background:var(--surface-2)}
+    .badge{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:800}.badge.green{background:rgba(68,192,108,.12)}.badge.yellow{background:rgba(241,184,74,.14)}.badge.red{background:rgba(255,108,108,.12)}.badge.blue{background:rgba(94,165,255,.12)}
+    .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}.chart-wrap{height:300px}.table-wrap{max-height:500px;overflow:auto} table{width:100%;border-collapse:collapse} th,td{padding:10px 8px;border-bottom:1px solid var(--border);text-align:left;font-size:13px} th{color:var(--muted);font-weight:600}
+    .drilldown{margin-top:16px}.drill-top{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}.mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.mini{padding:12px;border:1px solid var(--border);border-radius:16px;background:var(--surface-2)}.mini .v{font-size:22px;font-weight:800}.reasons{display:grid;gap:10px}.reason{padding:12px 14px;border-radius:16px;background:var(--surface-2);border:1px solid var(--border)}
+    @media(max-width:1320px){.top,.main,.drill-top,.two{grid-template-columns:1fr}.controls{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(2,1fr)}.hero-meta{grid-template-columns:repeat(2,1fr)}}
+    @media(max-width:760px){.page{padding:14px}.controls,.kpis,.hero-meta,.mini-grid{grid-template-columns:1fr}.hero h1{font-size:28px}}
+  </style>
+</head>
+<body>
+<div class="page">
+  <section class="grid top">
+    <div class="panel hero">
+      <div class="pill">WAR ROOM V2</div>
+      <h1>Operational Cockpit — drill-down + action layer</h1>
+      <p>Версия для оценки визуального считывания в боевом режиме: сеть магазинов, сигналы риска, детализация магазина и слой управленческих действий по проблемным KPI.</p>
+      <div class="hero-meta" id="heroMeta"></div>
+    </div>
+    <div class="panel side">
+      <div style="display:flex;justify-content:space-between;align-items:center"><strong>Режимы</strong><button class="btn" data-theme-toggle>◐</button></div>
+      <div class="subtle">Excel pilot нужен для привязки к реальным данным, а demo mode нужен для стресс-теста визуального восприятия при 20+ магазинах и контрастных сценариях.</div>
+      <div class="subtle">Сейчас отдельными блоками реализованы: 1) drill-down карточка магазина, 2) action layer с комментариями и действиями.</div>
+    </div>
+  </section>
+
+  <section class="controls">
+    <div class="segment" id="periodTabs">
+      <button class="btn active" data-period="day">День</button>
+      <button class="btn" data-period="week">Неделя</button>
+      <button class="btn" data-period="month">Месяц</button>
+    </div>
+    <div class="segment" id="scopeTabs">
+      <button class="btn active" data-scope="network">Сеть</button>
+      <button class="btn" data-scope="store">Магазин</button>
+    </div>
+    <select class="select" id="modeSelect"><option value="excel">Excel pilot</option><option value="demo">Demo random</option></select>
+    <select class="select" id="storeSelect"></select>
+    <select class="select" id="regionSelect"><option>Все регионы</option><option>Дагестан</option></select>
+    <select class="select" id="clusterSelect"><option>Все кластеры</option></select>
+    <button class="btn" id="refreshBtn">Обновить</button>
+  </section>
+
+  <section class="grid kpis" id="kpiGrid"></section>
+
+  <section class="grid main">
+    <div class="grid">
+      <article class="card">
+        <div class="section-title">Action layer</div>
+        <div class="subtle" style="margin-bottom:12px">Отдельно по второму пункту: рекомендации строятся автоматически на основе статусов KPI и порогов.</div>
+        <div class="list" id="actionsList"></div>
+      </article>
+      <article class="card">
+        <div class="section-title">Проблемы и риски</div>
+        <div class="list" id="alertsList"></div>
+      </article>
+      <article class="card">
+        <div class="section-title">Таблица магазинов</div>
+        <div class="table-wrap"><table><thead><tr><th>Магазин</th><th>Выручка</th><th>% плана</th><th>YoY</th><th>СП %</th><th>ТЗ %</th><th>СП avail %</th><th>Потери</th><th>Недостача</th><th>Риск</th></tr></thead><tbody id="storeTable"></tbody></table></div>
+      </article>
+    </div>
+    <div class="grid">
+      <article class="card"><div class="section-title">Выполнение плана по магазинам</div><div class="chart-wrap"><canvas id="planChart"></canvas></div></article>
+      <article class="card"><div class="section-title">Структура потерь</div><div class="chart-wrap"><canvas id="lossesChart"></canvas></div></article>
+      <div class="two">
+        <article class="card"><div class="section-title">Лидеры</div><div class="list" id="topStores"></div></article>
+        <article class="card"><div class="section-title">Аутсайдеры</div><div class="list" id="bottomStores"></div></article>
+      </div>
+    </div>
+  </section>
+
+  <section class="card drilldown">
+    <div class="section-title">Drill-down карточка магазина</div>
+    <div class="subtle" style="margin-bottom:12px">Отдельно по первому пункту: карточка всегда показывает один выбранный или самый проблемный магазин, чтобы увидеть причины отклонений и локальные зоны риска.</div>
+    <div id="drilldown"></div>
+  </section>
+</div>
+<script>
+const qs = new URLSearchParams(location.search);
+const state = { period:'day', scope:'network', store:null, mode: qs.get('mode') || 'excel' };
+let planChart, lossesChart;
+const fmt = { money:v=>new Intl.NumberFormat('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1}).format(Number(v||0)), pct:v=>new Intl.NumberFormat('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1}).format(Number(v||0)), int:v=>new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0}).format(Number(v||0)) };
+const statusClass = s => ({green:'green',yellow:'yellow',red:'red',blue:'blue',neutral:''}[s]||'');
+
+async function loadFilters(){
+  const data = await fetch(`/api/v1/filters?mode=${state.mode}`).then(r=>r.json());
+  document.getElementById('storeSelect').innerHTML = '<option value="">Все магазины</option>' + data.stores.map(s=>`<option value="${s}">${s}</option>`).join('');
+  document.getElementById('clusterSelect').innerHTML = '<option>Все кластеры</option>' + data.clusters.map(s=>`<option>${s}</option>`).join('');
+  document.getElementById('modeSelect').value = state.mode;
+}
+
+async function loadDashboard(){
+  const params = new URLSearchParams({period:state.period,scope:state.scope,mode:state.mode});
+  if(state.scope==='store' && state.store) params.set('store',state.store);
+  const data = await fetch(`/api/v1/dashboard?${params.toString()}`).then(r=>r.json());
+  renderHero(data); renderKpis(data.kpis); renderActions(data.actions); renderAlerts(data.alerts); renderTable(data.store_table); renderRanks(data.top_stores, data.bottom_stores); renderCharts(data.charts); renderDrilldown(data.drilldown);
+}
+
+function renderHero(data){
+  const hero = document.getElementById('heroMeta');
+  const items = [['Период', data.period.toUpperCase()], ['Контур', data.scope==='network'?'Вся сеть':(data.selection.store||'Магазин')], ['Режим', data.mode], ['Обновление', data.last_update], ['Сеть', data.meta.network]];
+  hero.innerHTML = items.map(([k,v])=>`<div class='meta-box'><div class='k'>${k}</div><div class='v'>${v}</div></div>`).join('');
+}
+function renderKpis(items){
+  document.getElementById('kpiGrid').innerHTML = items.map(k=>`<article class='card'><div class='metric-label'>${k.label}</div><div class='metric-value ${statusClass(k.status_color)}'>${fmt.money(k.value)}</div><div class='metric-sub'>${k.hint||''}${k.plan!==null&&k.plan!==undefined?` · план ${fmt.money(k.plan)}`:''}${k.delta_pct!==null&&k.delta_pct!==undefined?` · ${(k.delta_pct>0?'+':'')}${fmt.pct(k.delta_pct)}%`:''}</div></article>`).join('');
+}
+function renderActions(items){
+  document.getElementById('actionsList').innerHTML = items.map(a=>`<div class='action'><div><strong>${a.priority} · ${a.title}</strong><div class='subtle'>${a.owner} · ${a.eta}</div><div class='subtle'>${a.rationale}</div></div><span class='badge ${a.status_color} ${a.status_color}'>${a.priority}</span></div>`).join('') || `<div class='action'><div><strong>P3 · Поддерживать текущий операционный режим</strong><div class='subtle'>Нет критичных действий</div></div><span class='badge green'>P3</span></div>`;
+}
+function renderAlerts(items){
+  document.getElementById('alertsList').innerHTML = items.map(a=>`<div class='alert'><div><strong>${a.title}</strong><div class='subtle'>${a.store||'Сеть'} · ${a.comment||''}</div></div><span class='badge ${a.severity} ${a.severity}'>${fmt.pct(a.value)}</span></div>`).join('') || `<div class='alert'><div><strong>Критичных сигналов нет</strong><div class='subtle'>Контур работает в целевом диапазоне</div></div><span class='badge green'>OK</span></div>`;
+}
+function renderTable(rows){
+  document.getElementById('storeTable').innerHTML = rows.map(r=>`<tr><td>${r.store}</td><td>${fmt.money(r.revenue)}</td><td class='${statusClass(r.status_color)}'>${fmt.pct(r.plan_pct||0)}%</td><td>${fmt.pct(r.yoy||0)}%</td><td>${fmt.pct(r.own_production_share_pct||0)}%</td><td>${fmt.pct(r.shop_availability||0)}%</td><td>${fmt.pct(r.production_availability||0)}%</td><td>${fmt.money(r.losses||0)}</td><td>${fmt.money(r.inventory_shortage||0)}</td><td><span class='badge ${r.status_color} ${r.status_color}'>${r.risk_level}</span></td></tr>`).join('');
+}
+function rankRow(r){ return `<div class='rank'><div><strong>${r.store}</strong><div class='subtle'>Выручка ${fmt.money(r.revenue)} млн · Потери ${fmt.money(r.losses||0)} млн</div></div><span class='badge ${r.status_color} ${r.status_color}'>${fmt.pct(r.plan_pct||0)}%</span></div>`; }
+function renderRanks(top,bottom){ document.getElementById('topStores').innerHTML = top.map(rankRow).join(''); document.getElementById('bottomStores').innerHTML = bottom.map(rankRow).join(''); }
+function destroyCharts(){ [planChart, lossesChart].forEach(c=>c&&c.destroy()); }
+function renderCharts(charts){ destroyCharts();
+  planChart = new Chart(document.getElementById('planChart'), { type:'bar', data:{ labels:charts.plan_vs_store.map(x=>x.store), datasets:[{ label:'% плана', data:charts.plan_vs_store.map(x=>x.plan_pct), backgroundColor:charts.plan_vs_store.map(x=>x.status_color==='green'?'#44c06c':x.status_color==='yellow'?'#f1b84a':'#ff6c6c'), borderRadius:8 }] }, options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#9baaa0'},grid:{display:false}},y:{ticks:{color:'#9baaa0'},grid:{color:'rgba(155,170,160,.15)'}}}}});
+  lossesChart = new Chart(document.getElementById('lossesChart'), { type:'doughnut', data:{ labels:charts.losses_structure.map(x=>x.group), datasets:[{ data:charts.losses_structure.map(x=>x.amount), backgroundColor:['#44c06c','#f1b84a','#5ea5ff','#ff6c6c','#43d7c2'] }] }, options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9baaa0'}}}}});
+}
+function miniKpis(title, items){ return `<div><div class='section-title' style='font-size:15px'>${title}</div><div class='mini-grid'>${items.map(k=>`<div class='mini'><div class='subtle'>${k.label}</div><div class='v ${statusClass(k.status_color)}'>${fmt.money(k.value)}</div><div class='subtle'>${k.hint||''}</div></div>`).join('')}</div></div>`; }
+function renderDrilldown(d){
+  if(!d){ document.getElementById('drilldown').innerHTML=''; return; }
+  document.getElementById('drilldown').innerHTML = `
+    <div class='drill-top'>
+      <div class='grid'>
+        <div class='card' style='padding:16px'>
+          <div class='section-title'>${d.store}</div>
+          <div class='subtle'>Риск: ${d.summary.risk_level} · Выполнение плана: ${fmt.pct(d.summary.plan_pct||0)}% · СП: ${fmt.pct(d.summary.own_production_share_pct||0)}%</div>
+        </div>
+        ${miniKpis('День', d.day_kpis)}
+        ${miniKpis('Неделя', d.week_kpis)}
+        ${miniKpis('Месяц', d.month_kpis)}
+      </div>
+      <div class='grid'>
+        <div>
+          <div class='section-title'>Причины отклонений</div>
+          <div class='reasons'>${d.reasons.map(x=>`<div class='reason'>${x}</div>`).join('')}</div>
+        </div>
+        <div>
+          <div class='section-title'>Локальные риски</div>
+          <div class='list'>${d.local_risks.map(a=>`<div class='alert'><div><strong>${a.title}</strong><div class='subtle'>${a.comment||''}</div></div><span class='badge ${a.severity} ${a.severity}'>${fmt.pct(a.value)}</span></div>`).join('') || `<div class='alert'><div><strong>Локальных рисков не выявлено</strong></div><span class='badge green'>OK</span></div>`}</div>
+        </div>
+        <div>
+          <div class='section-title'>Действия по магазину</div>
+          <div class='list'>${d.actions.map(a=>`<div class='action'><div><strong>${a.priority} · ${a.title}</strong><div class='subtle'>${a.owner} · ${a.eta}</div><div class='subtle'>${a.rationale}</div></div><span class='badge ${a.status_color} ${a.status_color}'>${a.priority}</span></div>`).join('')}</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+document.getElementById('periodTabs').addEventListener('click', e=>{ const b=e.target.closest('[data-period]'); if(!b) return; document.querySelectorAll('#periodTabs .btn').forEach(x=>x.classList.remove('active')); b.classList.add('active'); state.period=b.dataset.period; loadDashboard(); });
+document.getElementById('scopeTabs').addEventListener('click', e=>{ const b=e.target.closest('[data-scope]'); if(!b) return; document.querySelectorAll('#scopeTabs .btn').forEach(x=>x.classList.remove('active')); b.classList.add('active'); state.scope=b.dataset.scope; loadDashboard(); });
+document.getElementById('storeSelect').addEventListener('change', e=>{ state.store=e.target.value||null; if(state.store){ state.scope='store'; document.querySelectorAll('#scopeTabs .btn').forEach(x=>x.classList.toggle('active', x.dataset.scope==='store')); } loadDashboard(); });
+document.getElementById('modeSelect').addEventListener('change', async e=>{ state.mode=e.target.value; state.store=null; await loadFilters(); loadDashboard(); });
+document.getElementById('refreshBtn').addEventListener('click', loadDashboard);
+document.querySelector('[data-theme-toggle]').addEventListener('click', ()=>{ document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark'); });
+loadFilters().then(loadDashboard);
+</script>
+</body>
+</html>
