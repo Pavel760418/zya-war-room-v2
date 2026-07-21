@@ -36,7 +36,8 @@ _CSS = """
   font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
 }
 .block-container{max-width:1700px;padding:18px 26px 40px;}
-#MainMenu,footer,header[data-testid="stHeader"]{visibility:hidden;height:0;}
+#MainMenu,footer{visibility:hidden;height:0;}
+header[data-testid="stHeader"]{background:transparent;}
 
 /* ==== Карточки / панели ==== */
 .panel,.card{

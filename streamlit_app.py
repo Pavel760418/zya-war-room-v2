@@ -22,7 +22,12 @@ from app.streamlit_ui.diagnostics import render_full_diagnostics, render_summary
 from app.streamlit_ui.theme import inject_theme
 from app.streamlit_ui.views import render_body, render_hero
 
-st.set_page_config(page_title="War Room v2 — Operational Cockpit", page_icon="🍏", layout="wide")
+st.set_page_config(
+    page_title="War Room v2 — Operational Cockpit",
+    page_icon="🍏",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 inject_theme()
 
 PERIOD_LABELS = {"day": "День", "week": "Неделя", "month": "Месяц"}
@@ -48,7 +53,7 @@ with st.sidebar:
 
     st.divider()
     mode_label = st.radio("Источник данных", ["Excel pilot", "Demo random"], index=0)
-    mode = "excel" if mode_label == "Excel pilot" else "demo"
+    mode = "demo" if mode_label == "Demo random" else "excel"
 
     if mode == "excel":
         uploaded = st.file_uploader("Загрузить исходный Excel (.xlsx)", type=["xlsx", "xls"])
