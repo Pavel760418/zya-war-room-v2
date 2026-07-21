@@ -7,6 +7,14 @@ This repo contains **two front-ends over one shared business core** (ZYA War Roo
 - Shared core: `app/services/metrics_service.py` (KPI/drilldown/action logic) + `app/models/schemas.py`. Both front-ends reuse it; don't fork the logic.
 - Robust Excel ingestion lives in `app/ingestion/` (`schema`, `excel_loader`, `data_mapping`, `data_validation`, `error_handling`, `pipeline`, `sample_inputs`). It returns a `raw` dict shaped exactly like what `MetricsService(..., mode='excel')` expects, so the calc layer is untouched.
 - Streamlit UI lives in `app/streamlit_ui/` (`theme`, `formatting`, `render`, `charts`, `views`, `diagnostics`, `data_access`); entrypoint is `streamlit_app.py`.
+- Downloadable Excel template is generated programmatically in `app/ingestion/template.py` (built from `schema`, so it stays ingestible) and offered via `st.download_button` in the sidebar and diagnostics page.
+
+### Dependencies (split for a clean Streamlit Cloud deploy)
+
+- `requirements.txt` — **Streamlit only** (streamlit, pandas, numpy, openpyxl, plotly, pydantic). This is what Streamlit Community Cloud installs (Main file: `streamlit_app.py`). Do NOT add FastAPI/uvicorn/pytest here — they are unnecessary for the Streamlit app and bloat/risk the deploy.
+- `requirements-fastapi.txt` — FastAPI extras (`-r requirements.txt` + fastapi/uvicorn/python-multipart).
+- `requirements-dev.txt` — full dev env (`-r requirements-fastapi.txt` + pytest). The VM update script installs this when present.
+- The Streamlit import chain does not import FastAPI (verified), so the two apps are isolated.
 
 ### Services
 
