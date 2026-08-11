@@ -15,6 +15,7 @@ from app.ingestion import ingest_excel
 from app.ingestion.data_validation import coerce_numeric_series, coerce_string_series
 from app.ingestion.error_handling import Severity
 from app.ingestion.sample_inputs import (
+    build_alias_shuffled_workbook,
     build_broken_workbook,
     build_clean_workbook,
     build_unreadable_bytes,
@@ -159,3 +160,16 @@ def test_missing_columns_get_safe_defaults():
     cols = res.raw["sales_month"].columns
     assert "Выручка план" in cols and "Количество чеков" in cols
     assert (res.raw["sales_month"]["Выручка план"] == 0).all()
+
+
+def test_catalog_alias_sheet_and_column_names():
+    """Словарь_алиасов: 'Продажи (день)', revenue_fact, переставленные колонки."""
+    res = ingest_excel(build_alias_shuffled_workbook(), filename="alias.xlsx")
+    assert res.ok is True
+    assert res.report.sheet("sales_day").found is True
+    assert res.report.sheet("sales_month").found is True
+    day = res.raw["sales_day"]
+    assert "Выручка факт" in day.columns and "Магазин" in day.columns
+    assert (day["Выручка план"] == 0).all()  # optional missing → default
+    dash = MetricsService(res.raw, mode="excel").build_dashboard(period="day")
+    assert len(dash.store_table) >= 1

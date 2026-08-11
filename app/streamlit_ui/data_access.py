@@ -73,7 +73,16 @@ except Exception as _exc:  # noqa: BLE001 — Cloud may lack pymssql/dotenv/ Fre
 
 
 def sql_available() -> bool:
-    return bool(_SQL_AVAILABLE)
+    """True only when SQL modules import AND a live connection works.
+
+    Streamlit Cloud has no route to private 1C SQL — this keeps Cloud on Excel/Demo.
+    """
+    if not _SQL_AVAILABLE or SqlDataService is None:
+        return False
+    try:
+        return bool(SqlDataService().status().ok)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def empty_raw() -> dict:
@@ -135,26 +144,33 @@ def sql_connection_status() -> Any:
 
 @st.cache_data(show_spinner=False, ttl=60)
 def load_sql_result(_refresh_token: int = 0) -> Any:
-    """Загрузить raw из SQL. ``_refresh_token`` сбрасывает кэш при кнопке «Обновить»."""
-    if not _SQL_AVAILABLE or SqlDataService is None:
+    """Загрузить raw из SQL. При недоступности — Excel (не пустой каркас)."""
+    fallback_notice = "MSSQL источник недоступен, используется Excel"
+
+    def _excel_fallback(status: Any, extra_warnings: list[str] | None = None) -> Any:
+        excel = load_excel_result(None, None)
+        warnings = [fallback_notice, *(extra_warnings or [])]
+        if excel.report and excel.report.messages:
+            warnings.append(f"Excel: {excel.report.status}")
         return SqlLoadResult(
-            raw=empty_raw(),
-            status=sql_connection_status(),
-            warnings=[
-                "SQL недоступен на Streamlit Cloud / без server deps. "
-                "Выберите Excel pilot или Demo random."
-            ],
+            raw=excel.raw,
+            status=status,
+            warnings=warnings,
             mapping_complete=False,
+            last_success_at=None,
         )
+
+    if not _SQL_AVAILABLE or SqlDataService is None:
+        return _excel_fallback(sql_connection_status(), [_SQL_IMPORT_ERROR or "sql_unavailable"])
     try:
-        return SqlDataService().load()
-    except Exception as exc:  # noqa: BLE001 — soft degrade
-        empty = SqlDataService().empty_raw()
-        return SqlLoadResult(
-            raw=empty,
-            status=SqlStatus(ok=False, message="Ошибка SQL-слоя", error=str(exc)[:300]),
-            warnings=[str(exc)[:300]],
-            mapping_complete=False,
+        result = SqlDataService().load()
+        if not getattr(result.status, "ok", False):
+            return _excel_fallback(result.status, list(result.warnings or []))
+        return result
+    except Exception as exc:  # noqa: BLE001 — soft degrade to excel
+        return _excel_fallback(
+            SqlStatus(ok=False, message="Ошибка SQL-слоя", error=str(exc)[:300]),
+            [str(exc)[:300]],
         )
 
 

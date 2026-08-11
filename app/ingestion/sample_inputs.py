@@ -17,6 +17,7 @@ __all__ = [
     "default_excel_path",
     "build_clean_workbook",
     "build_broken_workbook",
+    "build_alias_shuffled_workbook",
     "build_unreadable_bytes",
 ]
 
@@ -107,6 +108,64 @@ def build_broken_workbook() -> bytes:
     with pd.ExcelWriter(buffer, engine="openpyxl", mode="a") as writer:
         sales.to_excel(writer, sheet_name="Продажи Месяц", index=False, header=False)
     return buffer.getvalue()
+
+
+def build_alias_shuffled_workbook() -> bytes:
+    """Каталожные алиасы: пробелы в имени листа, переставленные колонки, EN-синонимы.
+
+    Обязательные поля на месте; необязательные (план, чеки) частично опущены.
+    """
+    return _write(
+        {
+            "meta": pd.DataFrame(
+                {"key": ["Название сети", "Валюта"], "value": ["Зеленое Яблоко", "RUB"]}
+            ),
+            "Продажи (день)": pd.DataFrame(
+                {
+                    "store": ["Каспийск", "Махачкала"],
+                    "date": ["2026-06-15", "2026-06-15"],
+                    "revenue_fact": [4_200_000, 3_800_000],
+                    # Выручка план / чеки намеренно отсутствуют (необязательные)
+                }
+            ),
+            "sales_month": pd.DataFrame(
+                {
+                    "Количество чеков": [1000, 900],
+                    "Магазин": ["Каспийск", "Махачкала"],
+                    "Выручка факт": [50_000_000, 40_000_000],
+                    "month": ["2026-06", "2026-06"],
+                }
+            ),
+            "penetration_week": pd.DataFrame(
+                {
+                    "Магазин": ["Каспийск", "Махачкала"],
+                    "total_receipts": [1000, 900],
+                    "sp_receipts": [320, 250],
+                    "pasqucci_receipts": [70, 55],
+                }
+            ),
+            "sp_month": pd.DataFrame(
+                {
+                    "Магазин": ["Каспийск", "Махачкала"],
+                    "sp_revenue": [12_000_000, 9_000_000],
+                    "sp_gross_profit": [4_000_000, 3_000_000],
+                }
+            ),
+            "stock_month": pd.DataFrame(
+                {
+                    "Магазин": ["Каспийск", "Махачкала"],
+                    "stock_fact": [10_000_000, 11_000_000],
+                }
+            ),
+            "losses_month": pd.DataFrame(
+                {
+                    "Магазин": ["Каспийск", "Каспийск", "Махачкала"],
+                    "loss_type": ["Списания", "Инвентаризация", "Списания"],
+                    "amount": [100_000, 50_000, 80_000],
+                }
+            ),
+        }
+    )
 
 
 def build_unreadable_bytes() -> bytes:

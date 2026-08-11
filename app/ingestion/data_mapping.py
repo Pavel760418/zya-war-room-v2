@@ -12,6 +12,7 @@ import pandas as pd
 
 from app.ingestion.error_handling import ColumnResolution
 from app.ingestion.schema import ColumnSpec, SheetSpec
+from app.ingestion.sheet_mapping import resolve_sheet_name
 from app.ingestion.text_utils import normalize, similarity
 
 __all__ = ["match_sheet", "resolve_columns"]
@@ -35,6 +36,13 @@ def match_sheet(spec: SheetSpec, available_sheets: list[str]) -> tuple[Optional[
     """
     norm_to_source = {normalize(s): s for s in available_sheets}
     canonical_norm = normalize(spec.canonical)
+
+    # 0. Каталог Словарь_алиасов → sheet_mapping (русские имена + синонимы).
+    for src in available_sheets:
+        resolved = resolve_sheet_name(src)
+        if resolved and resolved[1] == spec.canonical:
+            method = "exact" if normalize(src) == canonical_norm else "alias"
+            return src, method, 1.0
 
     # 1. Точное совпадение с каноническим именем.
     if canonical_norm in norm_to_source:

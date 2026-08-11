@@ -4,11 +4,16 @@ Uses only SELECT. Candidate queries are tagged by confidence:
 - high / medium / low — from discovery Excel analysis
 - never claimed as IT-confirmed fact
 
-Primary candidate feed (medium):
-  dbo._AccumRg6691 + dbo._Reference64 (store) + resources _Fld6703/6704/6708
+Catalog ETL templates (logical 1C names, MSSQL dialect) live in
+``app.ingestion.sql_extract`` (War-Room_Katalog_Metrik_SQL.xlsx). Physical
+``_DocumentNNN`` / ``_AccumRgNNNN`` mapping still goes through the confirmed
+retail repositories below until IT signs off on catalog object names.
 
-High:
-  dbo._Reference64 store directory; YearOffset date decode
+Primary runtime feed (confirmed checks):
+  dbo._Document156 + VT4039
+
+Fallback candidate:
+  dbo._AccumRg6691 + dbo._Reference64 (store) + resources _Fld6703/6704/6708
 """
 from __future__ import annotations
 

@@ -58,16 +58,24 @@ with st.sidebar:
     nav = st.radio("Навигация", ["Дашборд", "Диагностика загрузки"], index=0)
 
     st.divider()
-    # Streamlit Cloud cannot reach private SQL — default to Excel there.
+    # Production default = Excel (bundled pilot). MSSQL is optional; Cloud has no private SQL.
+    from app.core.data_source import configured_data_source_mode
+
+    _cfg_mode = configured_data_source_mode()
     _sql_ok = sql_available()
-    _source_options = ["Источник данных: SQL", "Резервный источник: Excel", "Demo random"]
-    _default_source = 0 if _sql_ok else 1
+    _source_options = ["Excel (пилот)", "MSSQL (1С, опционально)", "Demo random"]
+    if _cfg_mode == "mssql" and _sql_ok:
+        _default_source = 1
+    elif _cfg_mode == "demo":
+        _default_source = 2
+    else:
+        _default_source = 0
     mode_label = st.radio(
         "Источник данных",
         _source_options,
         index=_default_source,
     )
-    if mode_label.startswith("Источник данных: SQL"):
+    if mode_label.startswith("MSSQL"):
         mode = "sql"
     elif mode_label == "Demo random":
         mode = "demo"
@@ -115,8 +123,9 @@ with st.sidebar:
 
     st.divider()
     st.caption(
-        "SQL — основной источник. Excel — резерв и сверка цифр. Demo — синтетическая сеть "
-        "из 24 магазинов для визуального стресс-теста."
+        "Excel — основной продакшен-путь (пилот вшит в репозиторий). "
+        "MSSQL — опционально для 1С; при недоступности автоматически используется Excel. "
+        "Demo — синтетическая сеть из 24 магазинов."
     )
 
 
@@ -220,21 +229,24 @@ if report is not None:
     render_summary_banner(report)
 
 if mode == "sql" and sql_result is not None:
-    if sql_result.status.ok and sql_result.mapping_complete:
+    _used_excel_fallback = any(
+        "используется Excel" in str(w) for w in (sql_result.warnings or [])
+    )
+    if sql_result.status.ok and sql_result.mapping_complete and not _used_excel_fallback:
         st.caption("SQL: чеки и выручка из _Document156. План/ТЗ/СП/остатки в карточках — 0, пока нет SQL-маппинга.")
-    elif sql_result.status.ok and not sql_result.mapping_complete:
+    elif sql_result.status.ok and not sql_result.mapping_complete and not _used_excel_fallback:
         st.warning(
             "SQL в режиме кандидатов/fallback. Сверяйте цифры с Excel. "
             "Детали — во вкладке «Диагностика загрузки»."
         )
-    elif not sql_result.status.ok:
-        st.warning(
-            "SQL недоступен — показан пустой каркас. Переключитесь на Excel или нажмите "
-            "«Повторить обновление SQL»."
+    elif _used_excel_fallback or not sql_result.status.ok:
+        st.info(
+            "MSSQL источник недоступен, используется Excel. "
+            "Дашборд построен по пилотному файлу / загрузке."
         )
     if sql_result.warnings:
         for w in sql_result.warnings[:3]:
-            if w:
+            if w and "используется Excel" not in str(w):
                 st.caption(f"⚠ {w}")
 
 dashboard, derr = build_dashboard_safe(raw, metrics_mode, period, selected_store)

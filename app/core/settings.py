@@ -60,8 +60,19 @@ class AppSettings:
 
 def get_app_settings() -> AppSettings:
     secrets = _load_secret_files()
+    # Prefer DATA_SOURCE_MODE; fall back to WARROOM_DATA_SOURCE. Default excel
+    # so Streamlit Cloud boots with the bundled pilot workbook (no MSSQL).
+    raw_mode = (
+        os.getenv("DATA_SOURCE_MODE")
+        or os.getenv("WARROOM_DATA_SOURCE")
+        or "excel"
+    ).strip().lower() or "excel"
+    if raw_mode in ("mssql", "sql"):
+        raw_mode = "mssql"
+    elif raw_mode != "demo":
+        raw_mode = "excel"
     return AppSettings(
-        data_source_default=os.getenv("WARROOM_DATA_SOURCE", "sql").strip().lower() or "sql",
+        data_source_default=raw_mode,
         sql_connect_timeout=int(os.getenv("WARROOM_SQL_TIMEOUT", "8")),
         database_url=os.getenv("DATABASE_URL") or None,
         secrets_file=str(secrets) if secrets else None,

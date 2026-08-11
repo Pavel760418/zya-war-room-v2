@@ -48,12 +48,21 @@ streamlit run streamlit_app.py     # откроется http://localhost:8501
   листами, каноническими заголовками, примерами строк и листом-инструкцией с
   пометкой обязательных полей. Скачанный шаблон полностью совместим с ingestion.
 
-### Деплой в Streamlit Community Cloud
-1. Запушить репозиторий в GitHub.
-2. На share.streamlit.io выбрать репозиторий и указать **Main file: `streamlit_app.py`**.
-3. Зависимости берутся из `requirements.txt` (минимальный набор, **без** FastAPI,
-   тестов и `pydantic`), тема — из `.streamlit/config.toml`.
-4. **Python:** рекомендуется выбрать **3.13** (или 3.12) в Advanced settings.
+### Деплой в Streamlit Community Cloud (1 клик)
+1. Открыть https://share.streamlit.io/ → **New app**.
+2. Repository: `Pavel760418/zya-war-room-v2`, Branch: `main`, Main file: `streamlit_app.py`.
+3. Advanced: Python **3.13** (или 3.12). Секреты MSSQL **не обязательны**.
+4. Deploy. После сборки приложение открывается на URL вида  
+   `https://zya-war-room-v2-<hash>.streamlit.app/`  
+   (уже подключённый деплой обновляется сам при `git push` в `main`).
+
+**Режим данных по умолчанию — Excel** (`DATA_SOURCE_MODE=excel`): в репозитории лежит
+пилот `data/war-room-template-2-no-traffic-fixed.xlsx` (и `…-no-traffic.xlsx`).
+MSSQL (`DATA_SOURCE_MODE=mssql` + `DATABASE_URL`) опционален; при недоступности
+SQL приложение **молча** показывает Excel, без пустого экрана.
+
+Зависимости — `requirements.txt` (без `pymssql`/`pydantic`; SQL-драйвер только в
+`requirements-server.txt` для LAN-сервера). Тема — `.streamlit/config.toml`.
 
 > **Про Python 3.14.** Ранее деплой падал на сборке `pydantic-core` (Rust/PyO3),
 > который не собирается на новых Python без готовых wheels. Теперь DTO переведены
@@ -63,15 +72,17 @@ streamlit run streamlit_app.py     # откроется http://localhost:8501
 > wheels для `pyarrow`/`pandas`/`numpy`) выбирайте **Python 3.13**.
 
 ### Файлы зависимостей
-- `requirements.txt` — **только для Streamlit** (Streamlit Cloud использует его). Без `pydantic`.
+- `requirements.txt` — **только для Streamlit** (Streamlit Cloud использует его). Без `pydantic` и без `pymssql`.
+- `requirements-server.txt` — LAN-сервер с MSSQL (`pymssql` + dotenv).
 - `requirements-fastapi.txt` — зависимости FastAPI-версии (`app/main.py`); включает `pydantic`.
 - `requirements-dev.txt` — полное dev-окружение (Streamlit + FastAPI + `pytest`).
 
 ## Архитектура (reusable-слои)
-- `app/ingestion/` — устойчивая загрузка Excel: `schema` (словарь листов/колонок и
-  алиасов), `excel_loader` (data_loading), `data_mapping`, `data_validation`,
-  `error_handling`, `pipeline` (оркестратор), `sample_inputs` (фикстуры),
-  `template` (генерация Excel-шаблона).
+- `app/ingestion/` — устойчивая загрузка Excel: `schema`, `sheet_mapping`, `column_mapping`,
+  `sql_extract` (MSSQL-шаблоны каталога), `excel_loader`, `data_mapping`, `data_validation`,
+  `error_handling`, `pipeline`, `sample_inputs`, `template`.
+- `app/core/business_metrics/` — формулы KPI M01–M29 (каталог метрик).
+- `app/core/data_source.py` — `DATA_SOURCE_MODE` (excel | mssql | demo).
 - `app/models/schemas.py` — DTO на `dataclasses` (без pydantic) с методом `model_dump()`.
 - `app/services/metrics_service.py` — бизнес-метрики (общие для FastAPI и Streamlit).
 - `app/streamlit_ui/` — слой отображения: `theme`, `formatting`, `render`, `charts`,
@@ -80,5 +91,6 @@ streamlit run streamlit_app.py     # откроется http://localhost:8501
 
 ### Тесты
 ```bash
-pytest -q       # smoke/unit проверки устойчивости ingestion
+pip install -r requirements-dev.txt
+pytest -q       # ingestion + metrics; все должны быть зелёные
 ```
