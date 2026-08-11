@@ -1,0 +1,7 @@
+# Isolated analytics / admin API deps (NOT used by Streamlit Cloud).
+# Install: .venv/bin/pip install -r requirements-analytics.txt
+-r requirements-server.txt
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+python-multipart>=0.0.9
+sqlalchemy>=2.0,<3

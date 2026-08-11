@@ -1,0 +1,20 @@
+[Unit]
+Description=ZYA War Room Analytics API (isolated; does not replace Streamlit)
+After=network.target
+# Do NOT Require= warroom-streamlit — analytics is independent.
+
+[Service]
+Type=simple
+WorkingDirectory=/home/andr/apps/zya-war-room-v2
+EnvironmentFile=-/home/andr/.config/warroom/warroom.env
+Environment=WARROM_ANALYTICS_HOST=127.0.0.1
+Environment=WARROM_ANALYTICS_PORT=8510
+Environment=PYTHONPATH=/home/andr/apps/zya-war-room-v2
+ExecStart=/home/andr/apps/zya-war-room-v2/.venv/bin/python /home/andr/apps/zya-war-room-v2/scripts/run_analytics.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
