@@ -17,10 +17,10 @@ from app.ingestion.sample_inputs import build_alias_shuffled_workbook, build_cle
 from app.services.metrics_service import MetricsService
 
 
-def test_data_source_default_is_excel(monkeypatch):
+def test_data_source_default_is_mssql(monkeypatch):
     monkeypatch.delenv("DATA_SOURCE_MODE", raising=False)
     monkeypatch.delenv("WARROOM_DATA_SOURCE", raising=False)
-    assert configured_data_source_mode() == "excel"
+    assert configured_data_source_mode() == "mssql"
 
 
 def test_plan_traffic_light_matches_catalog_m03():

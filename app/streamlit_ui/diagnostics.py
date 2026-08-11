@@ -96,7 +96,7 @@ def render_full_diagnostics(report: IngestionReport) -> None:
                             "Заполнено по умолч.": col.filled_default,
                         }
                     )
-                st.dataframe(table_rows, use_container_width=True, hide_index=True)
+                st.dataframe(table_rows, width="stretch", hide_index=True)
 
             for msg in sheet.messages:
                 icon = _SEVERITY_ICON.get(msg.severity, "•")

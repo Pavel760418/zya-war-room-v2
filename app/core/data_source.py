@@ -1,11 +1,9 @@
-"""Data source mode resolution for War Room.
+"""Data source mode: SQL is the only user-facing path.
 
 ``DATA_SOURCE_MODE`` / ``WARROOM_DATA_SOURCE``:
-  - ``excel`` (default) — production-safe path for Streamlit Cloud; no MSSQL needed
-  - ``mssql`` / ``sql`` — optional live 1C SQL; silent fallback to excel on failure
-  - ``demo`` — synthetic network
-
-Never raise on missing secrets: callers must treat unresolved mssql as excel.
+  - ``mssql`` / ``sql`` (default) — live 1C SQL
+  - ``demo`` — synthetic network (sidebar optional / diagnostics)
+  - ``excel`` — **test fixtures only**; never selected automatically for users
 """
 from __future__ import annotations
 
@@ -21,21 +19,20 @@ _ENV_KEYS = ("DATA_SOURCE_MODE", "WARROOM_DATA_SOURCE")
 
 
 def configured_data_source_mode() -> DataSourceMode:
-    """Read preferred mode from env / Streamlit secrets-compatible env.
-
-    Default is **excel** so Cloud and local-without-DB always boot with data.
-    """
     raw = ""
-    for key in _ENV_KEYS:
-        raw = (os.getenv(key) or "").strip().lower()
-        if raw:
-            break
-    if raw in ("mssql", "sql"):
-        return "mssql"
+    try:
+        from app.core.settings import _secret_get
+
+        raw = (_secret_get("DATA_SOURCE_MODE") or _secret_get("WARROOM_DATA_SOURCE") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        for key in _ENV_KEYS:
+            raw = (os.getenv(key) or "").strip().lower()
+            if raw:
+                break
     if raw == "demo":
         return "demo"
-    # excel | empty | anything else → excel
-    return "excel"
+    # excel / empty / mssql / sql → product default is always MSSQL
+    return "mssql"
 
 
 def resolve_runtime_mode(
@@ -43,18 +40,12 @@ def resolve_runtime_mode(
     *,
     mssql_reachable: bool,
 ) -> tuple[DataSourceMode, str | None]:
-    """Map sidebar choice + connectivity → effective mode.
-
-    Returns ``(mode, fallback_notice)``. Notice is set when mssql was requested
-    but unavailable and excel is used instead.
-    """
+    """Map UI choice → mode. Never silently falls back to Excel."""
     choice = (ui_choice or "").strip().lower()
     if choice in ("demo",):
         return "demo", None
-    if choice in ("mssql", "sql"):
-        if mssql_reachable:
-            return "mssql", None
-        notice = "MSSQL источник недоступен, используется Excel"
-        logger.warning(notice)
-        return "excel", notice
-    return "excel", None
+    if not mssql_reachable:
+        notice = "MSSQL недоступен — задайте Secrets (DATABASE_URL или DB_*)"
+        logger.error(notice)
+        return "mssql", notice
+    return "mssql", None

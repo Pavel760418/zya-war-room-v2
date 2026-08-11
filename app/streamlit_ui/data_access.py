@@ -1,10 +1,7 @@
-"""Доступ к данным для Streamlit: загрузка, кэширование и безопасная сборка дашборда.
+"""Доступ к данным для Streamlit: SQL-only путь + безопасная сборка дашборда.
 
-Инкапсулирует выбор источника (sql / excel / demo), кэширование ingestion и защитную
-обёртку вокруг ``MetricsService`` — чтобы любые сбои деградировали мягко.
-
-SQL-зависимости (pymssql / dotenv) опциональны: на Streamlit Cloud приложение
-должно стартовать в Excel/Demo без падения импорта.
+Excel остаётся только для юнит-тестов (``app.ingestion`` / ``tests/``).
+Пользовательский UI никогда не переключается на Excel при сбое SQL.
 """
 from __future__ import annotations
 
@@ -13,16 +10,13 @@ from typing import Any, Optional
 
 import streamlit as st
 
-from app.core.config import DEFAULT_EXCEL_FILE
-from app.ingestion import IngestionResult, ingest_excel
-from app.ingestion.error_handling import IngestionReport, Severity, safe_call
+from app.core.settings import missing_database_secret_keys
+from app.ingestion.error_handling import safe_call
 from app.ingestion.schema import SCHEMA
-from app.ingestion.template import build_excel_template, template_filename
 from app.repositories.demo_repository import DemoRepository
 from app.services.metrics_service import MetricsService
 
 __all__ = [
-    "load_excel_result",
     "load_demo_raw",
     "load_sql_result",
     "sql_connection_status",
@@ -30,9 +24,11 @@ __all__ = [
     "build_dashboard_safe",
     "available_filters",
     "empty_raw",
-    "get_template_bytes",
-    "get_template_filename",
+    "render_sql_connection_error",
+    "SqlStatus",
+    "SqlLoadResult",
 ]
+
 
 _DEFAULT_FILTERS = {"periods": ["day", "week", "month"], "stores": [], "regions": [], "clusters": [], "formats": []}
 
@@ -66,17 +62,13 @@ try:
     SqlStatus = _SqlStatusImpl  # type: ignore[misc, assignment]
     SqlLoadResult = _SqlLoadResultImpl  # type: ignore[misc, assignment]
     _SQL_AVAILABLE = True
-except Exception as _exc:  # noqa: BLE001 — Cloud may lack pymssql/dotenv/ FreeTDS
+except Exception as _exc:  # noqa: BLE001
     _SQL_AVAILABLE = False
     _SQL_IMPORT_ERROR = f"{type(_exc).__name__}: {str(_exc)[:200]}"
     SqlDataService = None  # type: ignore[assignment, misc]
 
 
 def sql_available() -> bool:
-    """True only when SQL modules import AND a live connection works.
-
-    Streamlit Cloud has no route to private 1C SQL — this keeps Cloud on Excel/Demo.
-    """
     if not _SQL_AVAILABLE or SqlDataService is None:
         return False
     try:
@@ -86,7 +78,6 @@ def sql_available() -> bool:
 
 
 def empty_raw() -> dict:
-    """Пустой, но структурно валидный ``raw`` (все листы с каноническими колонками)."""
     import pandas as pd
 
     raw: dict = {"meta": {}}
@@ -96,45 +87,18 @@ def empty_raw() -> dict:
 
 
 @st.cache_data(show_spinner=False)
-def _ingest_bytes(data: bytes, filename: str) -> IngestionResult:
-    return ingest_excel(data, filename=filename)
-
-
-@st.cache_data(show_spinner=False)
-def _ingest_path(path_str: str, _mtime: float, filename: str) -> IngestionResult:
-    return ingest_excel(path_str, filename=filename)
-
-
-def load_excel_result(uploaded_bytes: Optional[bytes], filename: Optional[str]) -> IngestionResult:
-    """Получить результат ingestion: из загруженного файла либо из эталонного.
-
-    Никогда не бросает исключение — при отсутствии файла возвращает пустой,
-    но валидный результат с понятным сообщением.
-    """
-    if uploaded_bytes is not None:
-        return _ingest_bytes(uploaded_bytes, filename or "upload.xlsx")
-
-    if DEFAULT_EXCEL_FILE.exists():
-        return _ingest_path(str(DEFAULT_EXCEL_FILE), DEFAULT_EXCEL_FILE.stat().st_mtime, DEFAULT_EXCEL_FILE.name)
-
-    report = IngestionReport(filename=None)
-    report.add(Severity.WARNING, "Эталонный Excel не найден — загрузите файл через панель слева.")
-    return IngestionResult(raw=empty_raw(), report=report, ok=False)
-
-
-@st.cache_data(show_spinner=False)
 def load_demo_raw(seed: int = 42, stores_count: int = 24) -> dict:
-    """Сгенерировать demo-данные (сеть магазинов)."""
     return DemoRepository(seed=seed, stores_count=stores_count).load()
 
 
 def sql_connection_status() -> Any:
-    """Текущий статус SQL (без кэша — быстрый ping)."""
     if not _SQL_AVAILABLE or SqlDataService is None:
+        missing = missing_database_secret_keys()
         return SqlStatus(
             ok=False,
-            message="SQL-слой недоступен в этой среде (нет драйвера/секретов). Используйте Excel или Demo.",
+            message="SQL-слой недоступен (нет драйвера pymssql или ошибка импорта).",
             error=_SQL_IMPORT_ERROR or "sql_unavailable",
+            engine=",".join(missing) if missing else None,
         )
     try:
         return SqlDataService().status()
@@ -144,48 +108,78 @@ def sql_connection_status() -> Any:
 
 @st.cache_data(show_spinner=False, ttl=60)
 def load_sql_result(_refresh_token: int = 0) -> Any:
-    """Загрузить raw из SQL. При недоступности — Excel (не пустой каркас)."""
-    fallback_notice = "MSSQL источник недоступен, используется Excel"
-
-    def _excel_fallback(status: Any, extra_warnings: list[str] | None = None) -> Any:
-        excel = load_excel_result(None, None)
-        warnings = [fallback_notice, *(extra_warnings or [])]
-        if excel.report and excel.report.messages:
-            warnings.append(f"Excel: {excel.report.status}")
+    """Загрузить raw из SQL. Без Excel-fallback."""
+    if not _SQL_AVAILABLE or SqlDataService is None:
+        status = sql_connection_status()
         return SqlLoadResult(
-            raw=excel.raw,
+            raw=empty_raw(),
             status=status,
-            warnings=warnings,
+            warnings=[status.message, status.error or ""],
+            mapping_complete=False,
+            last_success_at=None,
+        )
+    try:
+        return SqlDataService().load()
+    except Exception as exc:  # noqa: BLE001
+        return SqlLoadResult(
+            raw=empty_raw(),
+            status=SqlStatus(ok=False, message="Ошибка SQL-слоя", error=str(exc)[:300]),
+            warnings=[str(exc)[:300]],
             mapping_complete=False,
             last_success_at=None,
         )
 
-    if not _SQL_AVAILABLE or SqlDataService is None:
-        return _excel_fallback(sql_connection_status(), [_SQL_IMPORT_ERROR or "sql_unavailable"])
-    try:
-        result = SqlDataService().load()
-        if not getattr(result.status, "ok", False):
-            return _excel_fallback(result.status, list(result.warnings or []))
-        return result
-    except Exception as exc:  # noqa: BLE001 — soft degrade to excel
-        return _excel_fallback(
-            SqlStatus(ok=False, message="Ошибка SQL-слоя", error=str(exc)[:300]),
-            [str(exc)[:300]],
+
+def render_sql_connection_error(status: Any) -> None:
+    """Полноэкранная ошибка подключения в стиле дашборда (без Excel-fallback)."""
+    missing = missing_database_secret_keys()
+    err = getattr(status, "error", None) or ""
+    msg = getattr(status, "message", "") or "Нет подключения к MSSQL"
+    st.markdown(
+        """
+        <div class="hero-card" style="padding:2rem 1.5rem;margin-bottom:1rem;">
+          <div class="pill">SQL ONLY</div>
+          <h2 style="margin:0.6rem 0 0.4rem;">Нет подключения к базе 1С (MSSQL)</h2>
+          <p class="subtle" style="max-width:52rem;">
+            Приложение работает только через SQL. Excel-загрузка в пользовательском
+            интерфейсе отключена. Задайте Secrets и убедитесь, что хост доступен
+            с машины, где крутится Streamlit.
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.error(f"{msg}" + (f" · `{err}`" if err else ""))
+    if missing or err == "missing_database_url":
+        st.markdown("**Не заданы обязательные Secrets:**")
+        keys = missing or ("DATABASE_URL", "DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD")
+        for k in keys:
+            st.code(k, language=None)
+        st.markdown(
+            "Скопируйте блок из `.streamlit/secrets.toml.example` в "
+            "**Streamlit Cloud → Settings → Secrets** (или локальный "
+            "`.streamlit/secrets.toml` / `~/.config/warroom/warroom.env`)."
         )
+    st.markdown(
+        """
+```toml
+# Вариант A — одна строка
+DATABASE_URL = "mssql+pymssql://USER:PASSWORD@HOST:1433/DATABASE"
 
-
-@st.cache_data(show_spinner=False)
-def get_template_bytes() -> bytes:
-    """Сгенерировать (и закэшировать) .xlsx-шаблон для скачивания."""
-    return build_excel_template()
-
-
-def get_template_filename() -> str:
-    return template_filename()
+# Вариант B — отдельные ключи
+DB_HOST = "192.168.2.10"
+DB_PORT = "1433"
+DB_NAME = "retail"
+DB_USER = "readonly_user"
+DB_PASSWORD = "***"
+```
+        """
+    )
+    if getattr(status, "server", None):
+        st.caption(f"Сервер из конфигурации: `{status.server}` / БД: `{status.database or '—'}`")
 
 
 def available_filters(raw: dict, mode: str) -> dict:
-    """Безопасно получить списки фильтров (магазины, регионы, кластеры)."""
     service, _ = safe_call(MetricsService, raw, mode=mode)
     if service is None:
         return dict(_DEFAULT_FILTERS)
@@ -194,10 +188,6 @@ def available_filters(raw: dict, mode: str) -> dict:
 
 
 def build_dashboard_safe(raw: dict, mode: str, period: str, store: Optional[str]):
-    """Безопасно собрать дашборд.
-
-    Возвращает ``(dashboard_or_None, error_or_None)``.
-    """
     service, err = safe_call(MetricsService, raw, mode=mode)
     if service is None:
         return None, err

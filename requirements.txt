@@ -1,15 +1,13 @@
-# Зависимости для Streamlit Cloud (Main file: streamlit_app.py).
-# Только то, что нужно Streamlit-приложению. БЕЗ pydantic: DTO переведены на
-# dataclasses (app/models/schemas.py), поэтому Rust-сборка pydantic-core не нужна —
-# деплой не падает на новых Python (3.13/3.14).
-# Версии заданы диапазонами, чтобы Streamlit Cloud смог поставить готовые wheels
-# под свою версию Python (см. README про рекомендуемый Python 3.13).
+# Зависимости для Streamlit (Cloud + LAN). Main file: streamlit_app.py.
+# Без pydantic: DTO на dataclasses (app/models/schemas.py).
 #
-# Примечание: pymssql / FreeTDS на Cloud не ставим — приватный SQL 1С недоступен
-# из интернета. SQL работает только на сервере 192.168.2.95.
+# SQL — единственный пользовательский путь. pymssql нужен для чтения 1С/MSSQL.
+# На Streamlit Cloud хост 1С должен быть доступен по сети (VPN/туннель) и
+# Secrets должны содержать DATABASE_URL (см. README / secrets.toml.example).
 streamlit>=1.41,<2
 pandas>=2.2.2,<3
 numpy>=1.26,<3
 openpyxl>=3.1
 plotly>=5.24,<6
 python-dotenv>=1.0,<2
+pymssql>=2.2.11,<3

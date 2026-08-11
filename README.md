@@ -1,96 +1,95 @@
 # ZYA War Room v2
 
-Версия v2 усиливает пилот двумя отдельными управленческими блоками:
-1. `drill-down карточка магазина` — детализация день / неделя / месяц, причины отклонений, локальные риски.
-2. `action layer` — управленческие комментарии и рекомендуемые действия по KPI-рискам.
+Операционный кокпит сети «Зеленое Яблоко». **Единственный пользовательский путь данных — MSSQL (1С).**
+Excel остаётся только как внутренняя фикстура для unit-тестов ingestion/метрик.
 
-Также добавлен режим `demo`, который генерирует реалистичные случайные данные по сети магазинов, чтобы оценить веб-приложение в условиях боевого визуального потока.
+## Streamlit (продукт)
 
-## Запуск (FastAPI-версия)
-```bash
-cd zya-war-room-v2
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-pip install -r requirements-fastapi.txt   # FastAPI + общее ядро
-uvicorn app.main:app --reload
-```
-
-> Для Streamlit-версии смотрите раздел «Streamlit-версия» ниже (ставится через
-> `requirements.txt`). Основной способ запуска продукта — Streamlit.
-
-## Режимы
-- Excel pilot: `http://127.0.0.1:8000/`
-- Demo mode: `http://127.0.0.1:8000/?mode=demo`
-
-## Streamlit-версия
-
-Streamlit-версия повторяет визуальный дизайн и бизнес-логику War Room, добавляет
-загрузку исходного Excel через интерфейс и устойчивый ingestion с диагностикой.
-
-### Запуск локально
 ```bash
 python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\\Scripts\\activate
-pip install -r requirements.txt    # только Streamlit-зависимости
-streamlit run streamlit_app.py     # откроется http://localhost:8501
+source .venv/bin/activate
+pip install -r requirements.txt
+# Secrets: скопируйте .streamlit/secrets.toml.example → .streamlit/secrets.toml
+# или экспортируйте DATABASE_URL / положите ~/.config/warroom/warroom.env
+streamlit run streamlit_app.py
 ```
 
-### Возможности
-- Левый сайдбар: навигация («Дашборд» / «Диагностика загрузки»), выбор источника
-  данных (Excel pilot / Demo random), загрузка исходного Excel (`.xlsx`) и кнопка
-  **«Скачать шаблон Excel»** (`st.download_button`).
-- Excel pilot читает эталонный файл `data/war-room-template-2-no-traffic.xlsx`, либо
-  загруженный пользователем файл. Demo random генерирует сеть из 24 магазинов.
-- Устойчивый ingestion: распознаёт переименованные листы и колонки по алиасам,
-  находит сдвинутые заголовки, приводит типы, отбрасывает мусор и **не падает** на
-  битом файле — вместо этого показывает предупреждения и раздел «Диагностика загрузки».
-- **Шаблон Excel** генерируется программно (`app/ingestion/template.py`) со всеми
-  листами, каноническими заголовками, примерами строк и листом-инструкцией с
-  пометкой обязательных полей. Скачанный шаблон полностью совместим с ingestion.
+Health-check: `curl -s http://127.0.0.1:8501/_stcore/health` → `ok`.
 
-### Деплой в Streamlit Community Cloud (1 клик)
-1. Открыть https://share.streamlit.io/ → **New app**.
-2. Repository: `Pavel760418/zya-war-room-v2`, Branch: `main`, Main file: `streamlit_app.py`.
-3. Advanced: Python **3.13** (или 3.12). Секреты MSSQL **не обязательны**.
-4. Deploy. После сборки приложение открывается на URL вида  
-   `https://zya-war-room-v2-<hash>.streamlit.app/`  
-   (уже подключённый деплой обновляется сам при `git push` в `main`).
+### Физический маппинг 1С
 
-**Режим данных по умолчанию — Excel** (`DATA_SOURCE_MODE=excel`): в репозитории лежит
-пилот `data/war-room-template-2-no-traffic-fixed.xlsx` (и `…-no-traffic.xlsx`).
-MSSQL (`DATA_SOURCE_MODE=mssql` + `DATABASE_URL`) опционален; при недоступности
-SQL приложение **молча** показывает Excel, без пустого экрана.
+Источник истины: `data/catalog/StrukturaKhraneniiaBazyDannykh.xlsx` (лист TDSheet).
+Загрузчик: `app/ingestion/metadata_catalog.py`. SQL: `app/ingestion/sql_extract.py`.
 
-Зависимости — `requirements.txt` (без `pymssql`/`pydantic`; SQL-драйвер только в
-`requirements-server.txt` для LAN-сервера). Тема — `.streamlit/config.toml`.
+| Логическое имя | Физическая таблица |
+|---|---|
+| РегистрНакопления.Продажи / ВыручкаИСебестоимостьПродаж | `_AccumRg6691` |
+| ТоварыНаСкладах / ОстаткиТоваровКомпании | `_AccumRg6601` |
+| Документ.БюджетПродаж (+ ТЧ) | `_Document107` / `_Document107_VT1803` |
+| Документ.БюджетНакладных… (+ ТЧ) | `_Document105` / `_Document105_VT1724` |
+| Документ.СписаниеТоваров (+ ТЧ) | `_Document172` / `_Document172_VT4675` |
+| Документ.Инвентаризация (+ ТЧ) | `_Document124` / `_Document124_VT2532` |
+| Справочник.ПодразделенияКомпании (магазины) | `_Reference64` |
+| Справочник.Номенклатура | `_Reference58` |
 
-> **Про Python 3.14.** Ранее деплой падал на сборке `pydantic-core` (Rust/PyO3),
-> который не собирается на новых Python без готовых wheels. Теперь DTO переведены
-> на `dataclasses`, и **`pydantic` из Streamlit-зависимостей удалён** — Rust-сборки
-> нет вовсе. Остальные пакеты заданы диапазонами, чтобы Streamlit Cloud поставил
-> готовые wheels под свою версию Python. Для максимальной надёжности (готовые
-> wheels для `pyarrow`/`pandas`/`numpy`) выбирайте **Python 3.13**.
+### Production checklist (Streamlit Cloud → Settings → Secrets)
 
-### Файлы зависимостей
-- `requirements.txt` — **только для Streamlit** (Streamlit Cloud использует его). Без `pydantic` и без `pymssql`.
-- `requirements-server.txt` — LAN-сервер с MSSQL (`pymssql` + dotenv).
-- `requirements-fastapi.txt` — зависимости FastAPI-версии (`app/main.py`); включает `pydantic`.
-- `requirements-dev.txt` — полное dev-окружение (Streamlit + FastAPI + `pytest`).
+Вставьте **точный** блок (подставьте реальные host/user/password; хост 1С должен быть
+доступен из Cloud — VPN/туннель/публичный endpoint):
 
-## Архитектура (reusable-слои)
-- `app/ingestion/` — устойчивая загрузка Excel: `schema`, `sheet_mapping`, `column_mapping`,
-  `sql_extract` (MSSQL-шаблоны каталога), `excel_loader`, `data_mapping`, `data_validation`,
-  `error_handling`, `pipeline`, `sample_inputs`, `template`.
-- `app/core/business_metrics/` — формулы KPI M01–M29 (каталог метрик).
-- `app/core/data_source.py` — `DATA_SOURCE_MODE` (excel | mssql | demo).
-- `app/models/schemas.py` — DTO на `dataclasses` (без pydantic) с методом `model_dump()`.
-- `app/services/metrics_service.py` — бизнес-метрики (общие для FastAPI и Streamlit).
-- `app/streamlit_ui/` — слой отображения: `theme`, `formatting`, `render`, `charts`,
-  `views`, `diagnostics`, `data_access`.
-- `streamlit_app.py` — точка входа Streamlit. FastAPI-версия (`app/main.py`) сохранена.
+```toml
+# === War Room MSSQL (1С) — обязательные Secrets ===
+DATABASE_URL = "mssql+pymssql://USER:PASSWORD@HOST:1433/DATABASE"
+
+# Альтернатива отдельными ключами (если не используете DATABASE_URL):
+# DB_HOST = "192.168.2.10"
+# DB_PORT = "1433"
+# DB_NAME = "retail"
+# DB_USER = "readonly_warroom"
+# DB_PASSWORD = "********"
+
+# DATA_SOURCE_MODE = "mssql"
+# WARROOM_SQL_TIMEOUT = "60"
+```
+
+Шаблон также лежит в `.streamlit/secrets.toml.example`.
+
+После `git push` в `main` Cloud пересоберёт приложение автоматически.
+URL: https://zya-war-room-v2-ay66kuefknxypjxopuwpaj.streamlit.app/
+
+Без Secrets приложение показывает оформленный экран ошибки подключения
+(`missing_database_url`) и **не** переключается на Excel.
+
+### Локальный / LAN запуск
+
+На сервере аналитики (`192.168.2.95`) используйте `EnvironmentFile` /
+`~/.config/warroom/warroom.env` с `DATABASE_URL` на `192.168.2.10:1433/retail`.
+
+Опциональный тестовый MSSQL (если прод недоступен):
+
+```bash
+docker compose -f docker-compose.mssql.yml up -d
+```
+
+### Зависимости
+
+- `requirements.txt` — Streamlit + `pymssql` + openpyxl/plotly (Cloud и LAN).
+- `requirements-server.txt` / `requirements-dev.txt` — расширенные наборы.
+- Рекомендуемый Python на Cloud: **3.13**.
 
 ### Тесты
+
 ```bash
 pip install -r requirements-dev.txt
-pytest -q       # ingestion + metrics; все должны быть зелёные
+pytest -q
+```
+
+Excel-фикстуры проверяют пайплайн маппинга; `tests/test_sql_path.py` —
+физический каталог + mock SQL + опциональный live MSSQL.
+
+## FastAPI (legacy)
+
+```bash
+pip install -r requirements-fastapi.txt
+uvicorn app.main:app --reload
 ```

@@ -23,8 +23,8 @@ def render_side_panel() -> str:
     return (
         "<div class='panel side'>"
         "<div style='display:flex;justify-content:space-between;align-items:center'><strong>Режимы</strong></div>"
-        "<div class='subtle'>Excel pilot нужен для привязки к реальным данным, а demo mode "
-        "нужен для стресс-теста визуального восприятия при 20+ магазинах и контрастных сценариях.</div>"
+        "<div class='subtle'>Источник данных — прямой SQL к 1С (MSSQL). "
+        "Физические таблицы берутся из каталога метаданных хранения.</div>"
         "<div class='subtle'>Сейчас отдельными блоками реализованы: 1) drill-down карточка магазина, "
         "2) action layer с комментариями и действиями.</div>"
         "</div>"
@@ -49,8 +49,8 @@ def render_body(dashboard: Optional[dict]) -> None:
     """Тело дашборда: KPI, основной блок и drill-down."""
     if not dashboard:
         st.warning(
-            "Дашборд не удалось собрать по текущим данным. Проверьте раздел «Диагностика загрузки» "
-            "или загрузите корректный Excel."
+            "Дашборд не удалось собрать по текущим данным. Проверьте раздел «Диагностика SQL» "
+            "и Secrets подключения к MSSQL."
         )
         return
 
@@ -83,10 +83,10 @@ def render_body(dashboard: Optional[dict]) -> None:
         charts = dashboard.get("charts", {})
         with st.container(border=True):
             st.markdown("<div class='section-title'>Выполнение плана по магазинам</div>", unsafe_allow_html=True)
-            st.plotly_chart(plan_chart(charts.get("plan_vs_store", [])), use_container_width=True, config=_CHART_CONFIG)
+            st.plotly_chart(plan_chart(charts.get("plan_vs_store", [])), width="stretch", config=_CHART_CONFIG)
         with st.container(border=True):
             st.markdown("<div class='section-title'>Структура потерь</div>", unsafe_allow_html=True)
-            st.plotly_chart(losses_chart(charts.get("losses_structure", [])), use_container_width=True, config=_CHART_CONFIG)
+            st.plotly_chart(losses_chart(charts.get("losses_structure", [])), width="stretch", config=_CHART_CONFIG)
         st.markdown(
             "<div class='two'>"
             + _card("Лидеры", render.ranks_html(dashboard.get("top_stores", [])))

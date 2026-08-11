@@ -10,7 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterable, Iterator, Optional, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 
@@ -140,24 +140,41 @@ class SqlDatabase:
                 error=redact_error(exc),
             )
 
-    def fetch_all(self, sql: str, params: Optional[Sequence[Any]] = None) -> list[tuple]:
+    @staticmethod
+    def _bind_params(params: Optional[Union[Sequence[Any], Mapping[str, Any]]]) -> Any:
+        if params is None:
+            return None
+        if isinstance(params, Mapping):
+            return dict(params)
+        return tuple(params)
+
+    def fetch_all(
+        self, sql: str, params: Optional[Union[Sequence[Any], Mapping[str, Any]]] = None
+    ) -> list[tuple]:
         self._assert_readonly(sql)
         with self.connection() as conn:
             cur = conn.cursor()
-            if params:
-                cur.execute(sql, tuple(params))
+            bind = self._bind_params(params)
+            if bind is not None:
+                cur.execute(sql, bind)
             else:
                 cur.execute(sql)
             rows = cur.fetchall() or []
             self._last_success_at = datetime.now(timezone.utc)
             return list(rows)
 
-    def fetch_df(self, sql: str, params: Optional[Sequence[Any]] = None, columns: Optional[Iterable[str]] = None) -> pd.DataFrame:
+    def fetch_df(
+        self,
+        sql: str,
+        params: Optional[Union[Sequence[Any], Mapping[str, Any]]] = None,
+        columns: Optional[Iterable[str]] = None,
+    ) -> pd.DataFrame:
         self._assert_readonly(sql)
         with self.connection() as conn:
             cur = conn.cursor()
-            if params:
-                cur.execute(sql, tuple(params))
+            bind = self._bind_params(params)
+            if bind is not None:
+                cur.execute(sql, bind)
             else:
                 cur.execute(sql)
             rows = cur.fetchall() or []
