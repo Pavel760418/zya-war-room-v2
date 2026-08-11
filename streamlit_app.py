@@ -20,6 +20,7 @@ from app.streamlit_ui.data_access import (
     load_demo_raw,
     load_excel_result,
     load_sql_result,
+    sql_available,
     sql_connection_status,
 )
 from app.streamlit_ui.diagnostics import render_full_diagnostics, render_summary_banner
@@ -57,10 +58,14 @@ with st.sidebar:
     nav = st.radio("Навигация", ["Дашборд", "Диагностика загрузки"], index=0)
 
     st.divider()
+    # Streamlit Cloud cannot reach private SQL — default to Excel there.
+    _sql_ok = sql_available()
+    _source_options = ["Источник данных: SQL", "Резервный источник: Excel", "Demo random"]
+    _default_source = 0 if _sql_ok else 1
     mode_label = st.radio(
         "Источник данных",
-        ["Источник данных: SQL", "Резервный источник: Excel", "Demo random"],
-        index=0,
+        _source_options,
+        index=_default_source,
     )
     if mode_label.startswith("Источник данных: SQL"):
         mode = "sql"

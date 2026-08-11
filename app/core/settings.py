@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ImportError:  # Streamlit Cloud may omit python-dotenv
+    def load_dotenv(*_args, **_kwargs) -> bool:  # type: ignore[misc]
+        return False
 
 # Preferred secret locations (first existing wins). Never commit these files.
 _SECRET_CANDIDATES = (

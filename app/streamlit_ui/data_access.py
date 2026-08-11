@@ -2,10 +2,14 @@
 
 Инкапсулирует выбор источника (sql / excel / demo), кэширование ingestion и защитную
 обёртку вокруг ``MetricsService`` — чтобы любые сбои деградировали мягко.
+
+SQL-зависимости (pymssql / dotenv) опциональны: на Streamlit Cloud приложение
+должно стартовать в Excel/Demo без падения импорта.
 """
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Optional
 
 import streamlit as st
 
@@ -15,15 +19,14 @@ from app.ingestion.error_handling import IngestionReport, Severity, safe_call
 from app.ingestion.schema import SCHEMA
 from app.ingestion.template import build_excel_template, template_filename
 from app.repositories.demo_repository import DemoRepository
-from app.repositories.sql_database import SqlStatus
 from app.services.metrics_service import MetricsService
-from app.services.sql_data_service import SqlDataService, SqlLoadResult
 
 __all__ = [
     "load_excel_result",
     "load_demo_raw",
     "load_sql_result",
     "sql_connection_status",
+    "sql_available",
     "build_dashboard_safe",
     "available_filters",
     "empty_raw",
@@ -32,6 +35,45 @@ __all__ = [
 ]
 
 _DEFAULT_FILTERS = {"periods": ["day", "week", "month"], "stores": [], "regions": [], "clusters": [], "formats": []}
+
+
+@dataclass
+class SqlStatus:
+    ok: bool
+    message: str
+    server: Optional[str] = None
+    database: Optional[str] = None
+    engine: Optional[str] = None
+    last_success_at: Optional[str] = None
+    error: Optional[str] = None
+
+
+@dataclass
+class SqlLoadResult:
+    raw: dict
+    status: SqlStatus
+    warnings: list[str] = field(default_factory=list)
+    mapping_complete: bool = False
+    last_success_at: Optional[str] = None
+    confidence_notes: list[str] = field(default_factory=list)
+
+
+_SQL_IMPORT_ERROR: Optional[str] = None
+try:
+    from app.repositories.sql_database import SqlStatus as _SqlStatusImpl
+    from app.services.sql_data_service import SqlDataService, SqlLoadResult as _SqlLoadResultImpl
+
+    SqlStatus = _SqlStatusImpl  # type: ignore[misc, assignment]
+    SqlLoadResult = _SqlLoadResultImpl  # type: ignore[misc, assignment]
+    _SQL_AVAILABLE = True
+except Exception as _exc:  # noqa: BLE001 — Cloud may lack pymssql/dotenv/ FreeTDS
+    _SQL_AVAILABLE = False
+    _SQL_IMPORT_ERROR = f"{type(_exc).__name__}: {str(_exc)[:200]}"
+    SqlDataService = None  # type: ignore[assignment, misc]
+
+
+def sql_available() -> bool:
+    return bool(_SQL_AVAILABLE)
 
 
 def empty_raw() -> dict:
@@ -77,8 +119,14 @@ def load_demo_raw(seed: int = 42, stores_count: int = 24) -> dict:
     return DemoRepository(seed=seed, stores_count=stores_count).load()
 
 
-def sql_connection_status() -> SqlStatus:
+def sql_connection_status() -> Any:
     """Текущий статус SQL (без кэша — быстрый ping)."""
+    if not _SQL_AVAILABLE or SqlDataService is None:
+        return SqlStatus(
+            ok=False,
+            message="SQL-слой недоступен в этой среде (нет драйвера/секретов). Используйте Excel или Demo.",
+            error=_SQL_IMPORT_ERROR or "sql_unavailable",
+        )
     try:
         return SqlDataService().status()
     except Exception as exc:  # noqa: BLE001
@@ -86,8 +134,18 @@ def sql_connection_status() -> SqlStatus:
 
 
 @st.cache_data(show_spinner=False, ttl=60)
-def load_sql_result(_refresh_token: int = 0) -> SqlLoadResult:
+def load_sql_result(_refresh_token: int = 0) -> Any:
     """Загрузить raw из SQL. ``_refresh_token`` сбрасывает кэш при кнопке «Обновить»."""
+    if not _SQL_AVAILABLE or SqlDataService is None:
+        return SqlLoadResult(
+            raw=empty_raw(),
+            status=sql_connection_status(),
+            warnings=[
+                "SQL недоступен на Streamlit Cloud / без server deps. "
+                "Выберите Excel pilot или Demo random."
+            ],
+            mapping_complete=False,
+        )
     try:
         return SqlDataService().load()
     except Exception as exc:  # noqa: BLE001 — soft degrade
