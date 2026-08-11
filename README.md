@@ -57,6 +57,12 @@ WARROOM_GATEWAY_TOKEN = "***"   # тот же, что в ~/.config/warroom/gatew
 
 Приложение: https://zya-war-room-v2-ay66kuefknxypjxopuwpaj.streamlit.app/
 
+Публичный SQL-дашборд (edge, без Streamlit login):
+`http://81.163.35.181:3000/warroom/`
+
+> `*.streamlit.app` сейчас отвечает `303` на страницу логина Streamlit (настройка Sharing в Cloud UI). Data-plane (gateway) уже доступен из интернета; после открытия Sharing=Public Cloud начнёт показывать те же данные через gateway.
+
+
 ## Физический маппинг 1С
 
 `data/catalog/StrukturaKhraneniiaBazyDannykh.xlsx` → `app/ingestion/metadata_catalog.py`
