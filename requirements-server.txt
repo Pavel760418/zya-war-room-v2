@@ -1,0 +1,5 @@
+# Server-side dependencies for Ubuntu Streamlit + Microsoft SQL Server (read-only).
+# Install: pip install -r requirements-server.txt
+-r requirements.txt
+pymssql>=2.2,<3
+python-dotenv>=1.0,<2

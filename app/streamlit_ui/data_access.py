@@ -1,11 +1,10 @@
 """Доступ к данным для Streamlit: загрузка, кэширование и безопасная сборка дашборда.
 
-Инкапсулирует выбор источника (demo / excel), кэширование ingestion и защитную
+Инкапсулирует выбор источника (sql / excel / demo), кэширование ingestion и защитную
 обёртку вокруг ``MetricsService`` — чтобы любые сбои деградировали мягко.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
 import streamlit as st
@@ -16,11 +15,15 @@ from app.ingestion.error_handling import IngestionReport, Severity, safe_call
 from app.ingestion.schema import SCHEMA
 from app.ingestion.template import build_excel_template, template_filename
 from app.repositories.demo_repository import DemoRepository
+from app.repositories.sql_database import SqlStatus
 from app.services.metrics_service import MetricsService
+from app.services.sql_data_service import SqlDataService, SqlLoadResult
 
 __all__ = [
     "load_excel_result",
     "load_demo_raw",
+    "load_sql_result",
+    "sql_connection_status",
     "build_dashboard_safe",
     "available_filters",
     "empty_raw",
@@ -72,6 +75,29 @@ def load_excel_result(uploaded_bytes: Optional[bytes], filename: Optional[str]) 
 def load_demo_raw(seed: int = 42, stores_count: int = 24) -> dict:
     """Сгенерировать demo-данные (сеть магазинов)."""
     return DemoRepository(seed=seed, stores_count=stores_count).load()
+
+
+def sql_connection_status() -> SqlStatus:
+    """Текущий статус SQL (без кэша — быстрый ping)."""
+    try:
+        return SqlDataService().status()
+    except Exception as exc:  # noqa: BLE001
+        return SqlStatus(ok=False, message="SQL слой недоступен", error=str(exc)[:300])
+
+
+@st.cache_data(show_spinner=False, ttl=60)
+def load_sql_result(_refresh_token: int = 0) -> SqlLoadResult:
+    """Загрузить raw из SQL. ``_refresh_token`` сбрасывает кэш при кнопке «Обновить»."""
+    try:
+        return SqlDataService().load()
+    except Exception as exc:  # noqa: BLE001 — soft degrade
+        empty = SqlDataService().empty_raw()
+        return SqlLoadResult(
+            raw=empty,
+            status=SqlStatus(ok=False, message="Ошибка SQL-слоя", error=str(exc)[:300]),
+            warnings=[str(exc)[:300]],
+            mapping_complete=False,
+        )
 
 
 @st.cache_data(show_spinner=False)

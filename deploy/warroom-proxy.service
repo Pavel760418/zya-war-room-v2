@@ -1,0 +1,17 @@
+[Unit]
+Description=ZYA War Room IP-allowlist proxy
+After=network.target warroom-streamlit.service
+Requires=warroom-streamlit.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/andr/apps/zya-war-room-v2
+EnvironmentFile=/home/andr/.config/warroom/warroom.env
+ExecStart=/home/andr/apps/zya-war-room-v2/.venv/bin/python /home/andr/apps/zya-war-room-v2/scripts/ip_allowlist_proxy.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target

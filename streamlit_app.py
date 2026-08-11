@@ -19,6 +19,8 @@ from app.streamlit_ui.data_access import (
     get_template_filename,
     load_demo_raw,
     load_excel_result,
+    load_sql_result,
+    sql_connection_status,
 )
 from app.streamlit_ui.diagnostics import render_full_diagnostics, render_summary_banner
 from app.streamlit_ui.theme import inject_theme
@@ -46,6 +48,7 @@ def _period_label(code: str) -> str:
 ss = st.session_state
 ss.setdefault("uploaded_bytes", None)
 ss.setdefault("uploaded_name", None)
+ss.setdefault("sql_refresh", 0)
 
 with st.sidebar:
     st.markdown("<div class='pill'>WAR ROOM V2</div>", unsafe_allow_html=True)
@@ -54,8 +57,33 @@ with st.sidebar:
     nav = st.radio("Навигация", ["Дашборд", "Диагностика загрузки"], index=0)
 
     st.divider()
-    mode_label = st.radio("Источник данных", ["Excel pilot", "Demo random"], index=0)
-    mode = "demo" if mode_label == "Demo random" else "excel"
+    mode_label = st.radio(
+        "Источник данных",
+        ["Источник данных: SQL", "Резервный источник: Excel", "Demo random"],
+        index=0,
+    )
+    if mode_label.startswith("Источник данных: SQL"):
+        mode = "sql"
+    elif mode_label == "Demo random":
+        mode = "demo"
+    else:
+        mode = "excel"
+
+    if mode == "sql":
+        status = sql_connection_status()
+        if status.ok:
+            st.success("SQL: подключено")
+            st.caption(f"База: {status.database or '—'} · сервер: {status.server or '—'}")
+            if status.last_success_at:
+                st.caption(f"Последний успех: {status.last_success_at}")
+        else:
+            st.warning("SQL временно недоступен — приложение работает в режиме деградации.")
+            if status.error:
+                st.caption(f"Ошибка: {status.error}")
+        if st.button("Повторить обновление SQL", use_container_width=True):
+            ss.sql_refresh = int(ss.sql_refresh) + 1
+            st.cache_data.clear()
+            st.rerun()
 
     if mode == "excel":
         uploaded = st.file_uploader("Загрузить исходный Excel (.xlsx)", type=["xlsx"])
@@ -71,7 +99,6 @@ with st.sidebar:
         else:
             st.caption("Файл не загружен — используется эталонный пилотный Excel.")
 
-    # Скачиваемый Excel-шаблон для ручного заполнения менеджерами.
     st.download_button(
         "⬇️ Скачать шаблон Excel",
         data=get_template_bytes(),
@@ -83,8 +110,8 @@ with st.sidebar:
 
     st.divider()
     st.caption(
-        "Excel pilot привязывает дашборд к реальным данным. Demo random генерирует сеть "
-        "из 24 магазинов для стресс-теста визуального восприятия."
+        "SQL — основной источник. Excel — резерв и сверка цифр. Demo — синтетическая сеть "
+        "из 24 магазинов для визуального стресс-теста."
     )
 
 
@@ -92,12 +119,19 @@ with st.sidebar:
 # Загрузка данных (никогда не роняем приложение)
 # --------------------------------------------------------------------------- #
 report = None
+sql_result = None
 if mode == "demo":
     raw = load_demo_raw()
+    metrics_mode = "demo"
+elif mode == "sql":
+    sql_result = load_sql_result(ss.sql_refresh)
+    raw = sql_result.raw
+    metrics_mode = "excel"
 else:
     result = load_excel_result(ss.uploaded_bytes, ss.uploaded_name)
     raw = result.raw
     report = result.report
+    metrics_mode = "excel"
 
 
 # --------------------------------------------------------------------------- #
@@ -105,7 +139,33 @@ else:
 # --------------------------------------------------------------------------- #
 if nav == "Диагностика загрузки":
     if mode == "demo":
-        st.info("Диагностика доступна для режима Excel pilot. В demo-режиме данные генерируются программно.")
+        st.info("Диагностика доступна для SQL и Excel. В demo-режиме данные генерируются программно.")
+    elif mode == "sql":
+        st.subheader("Диагностика SQL")
+        status = sql_result.status if sql_result else sql_connection_status()
+        st.write(
+            {
+                "ok": status.ok,
+                "message": status.message,
+                "server": status.server,
+                "database": status.database,
+                "last_success_at": (sql_result.last_success_at if sql_result else None),
+                "mapping_complete": (sql_result.mapping_complete if sql_result else False),
+                "error": status.error,
+            }
+        )
+        if sql_result and getattr(sql_result, "confidence_notes", None):
+            st.markdown("**Кандидаты (высокий / средний / низкий):**")
+            for n in sql_result.confidence_notes:
+                st.caption(f"• {n}")
+        if sql_result and sql_result.warnings:
+            for w in sql_result.warnings:
+                if w:
+                    st.warning(w)
+        st.info(
+            "Сейчас включён режим SQL-кандидатов по результатам discovery. "
+            "IT-подтверждённый маппинг ещё не закрыт — сверяйте с Excel."
+        )
     elif report is not None:
         render_full_diagnostics(report)
         st.divider()
@@ -122,12 +182,9 @@ if nav == "Диагностика загрузки":
 # --------------------------------------------------------------------------- #
 # Страница: Дашборд
 # --------------------------------------------------------------------------- #
-# Шапка (hero) должна быть сверху, но зависит от собранного дашборда, поэтому
-# резервируем контейнер и заполняем его после сборки данных.
 hero_area = st.container()
 
-# --- Панель контролов (мирроринг исходной controls-строки) ---
-filters = available_filters(raw, mode)
+filters = available_filters(raw, metrics_mode)
 store_options = [_ALL_STORES] + list(filters.get("stores", []))
 region_options = [_ALL_STORES.replace("магазины", "регионы")] + list(filters.get("regions", []))
 cluster_options = [_ALL_STORES.replace("магазины", "кластеры")] + list(filters.get("clusters", []))
@@ -146,20 +203,36 @@ with c_cluster:
     st.selectbox("Кластер", cluster_options, index=0, label_visibility="collapsed")
 with c_refresh:
     if st.button("Обновить", use_container_width=True):
+        ss.sql_refresh = int(ss.sql_refresh) + 1
         st.cache_data.clear()
         st.rerun()
 
-# Выбор магазина переводит контур в режим «Магазин» (как в оригинале).
 selected_store = store_choice if store_choice != _ALL_STORES else None
 if scope_label == "Магазин" and not selected_store and store_options[1:]:
-    selected_store = None  # контур «Магазин» без выбора — показываем самый проблемный
+    selected_store = None
 
-# --- Плашка статуса загрузки (только для Excel) ---
 if report is not None:
     render_summary_banner(report)
 
-# --- Сборка и отрисовка дашборда ---
-dashboard, derr = build_dashboard_safe(raw, mode, period, selected_store)
+if mode == "sql" and sql_result is not None:
+    if sql_result.status.ok and sql_result.mapping_complete:
+        st.caption("SQL: чеки и выручка из _Document156. План/ТЗ/СП/остатки в карточках — 0, пока нет SQL-маппинга.")
+    elif sql_result.status.ok and not sql_result.mapping_complete:
+        st.warning(
+            "SQL в режиме кандидатов/fallback. Сверяйте цифры с Excel. "
+            "Детали — во вкладке «Диагностика загрузки»."
+        )
+    elif not sql_result.status.ok:
+        st.warning(
+            "SQL недоступен — показан пустой каркас. Переключитесь на Excel или нажмите "
+            "«Повторить обновление SQL»."
+        )
+    if sql_result.warnings:
+        for w in sql_result.warnings[:3]:
+            if w:
+                st.caption(f"⚠ {w}")
+
+dashboard, derr = build_dashboard_safe(raw, metrics_mode, period, selected_store)
 dash_dict = dashboard.model_dump() if dashboard is not None else None
 
 with hero_area:

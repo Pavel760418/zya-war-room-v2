@@ -37,8 +37,11 @@ class MetricsService:
             ))
         return rows
 
-    def _excel_rows(self):
-        sales_month = self.raw['sales_month']
+    def _excel_rows(self, period: str = 'month'):
+        sheet_key = {'day': 'sales_day', 'week': 'sales_week', 'month': 'sales_month'}.get(period, 'sales_month')
+        sales_month = self.raw.get(sheet_key)
+        if sales_month is None or getattr(sales_month, 'empty', True):
+            sales_month = self.raw['sales_month']
         availability = self.raw['availability_week']
         sp_month = self.raw['sp_month']
         stock = self.raw['stock_month']
@@ -49,7 +52,7 @@ class MetricsService:
             a = availability[availability['Магазин'].astype(str)==store].iloc[0].to_dict() if not availability[availability['Магазин'].astype(str)==store].empty else {}
             sp = sp_month[sp_month['Магазин'].astype(str)==store].iloc[0].to_dict() if not sp_month[sp_month['Магазин'].astype(str)==store].empty else {}
             st = stock[stock['Магазин'].astype(str)==store].iloc[0].to_dict() if not stock[stock['Магазин'].astype(str)==store].empty else {}
-            ls = losses[losses['Магазин'].astype(str)==store]['Сумма'].sum() / 1_000_000
+            ls = losses[losses['Магазин'].astype(str)==store]['Сумма'].sum() / 1_000_000 if not losses.empty else 0
             revenue = float(m.get('Выручка факт',0))/1_000_000
             plan = float(m.get('Выручка план',0))/1_000_000
             py = revenue/1.056 if revenue else 0
@@ -59,21 +62,22 @@ class MetricsService:
             shop_av = float(a.get('Топ ТЗ доступно позиций',0))/max(float(a.get('Топ ТЗ всего позиций',0)),1)*100 if a else 0
             prod_av = float(a.get('Топ СП доступно позиций',0))/max(float(a.get('Топ СП всего позиций',0)),1)*100 if a else 0
             plan_pct = revenue/plan*100 if plan else 0
-            status = self._status(plan_pct,100,95)
+            status = self._status(plan_pct,100,95) if plan else 'blue'
             rows.append(StoreRow(
                 store=store, region='Дагестан', cluster='Пилот', format='Супермаркет', revenue=round(revenue,2), plan=round(plan,2), py=round(py,2),
-                plan_pct=round(plan_pct,1), yoy=round((revenue/py-1)*100,1) if py else 0, avg_ticket=avg_ticket, checks=round(checks,1),
+                plan_pct=round(plan_pct,1), yoy=round((revenue/py-1)*100,1) if py else 0, avg_ticket=avg_ticket, checks=round(checks,4),
                 own_production_share_pct=round(own_share,1), shop_availability=round(shop_av,1), production_availability=round(prod_av,1),
-                stock_fact=round(float(st.get('Остатки на конец месяца факт',0))/1_000_000,2), stock_plan=round(float(st.get('Остатки на конец месяца план',0))/1_000_000,2),
+                stock_fact=round(float(st.get('Остатки на конец месяца факт',0))/1_000_000,2) if st else 0,
+                stock_plan=round(float(st.get('Остатки на конец месяца план',0))/1_000_000,2) if st else 0,
                 losses=round(ls,2), inventory_shortage=round(ls*0.23,2), status_color=status, risk_level=self._risk(status)
             ))
         return rows
 
-    def rows(self):
-        return self._demo_rows() if self.mode == 'demo' else self._excel_rows()
+    def rows(self, period: str = 'month'):
+        return self._demo_rows() if self.mode == 'demo' else self._excel_rows(period)
 
     def filters(self):
-        rows = self.rows()
+        rows = self.rows('month')
         return {
             'periods': ['day','week','month'],
             'stores': [r.store for r in rows],
@@ -128,10 +132,10 @@ class MetricsService:
         return StoreDrilldown(store=row.store, summary=row, day_kpis=day, week_kpis=week, month_kpis=month, reasons=reasons or ['Существенных отклонений не выявлено.'], local_risks=local_risks, actions=self.build_actions(row))
 
     def build_dashboard(self, period='month', store: Optional[str]=None):
-        rows = self.rows()
+        rows = self.rows(period)
         if store:
             rows = [r for r in rows if r.store == store]
-        summary_rows = rows if rows else self.rows()
+        summary_rows = rows if rows else self.rows(period)
         revenue = round(sum(r.revenue for r in summary_rows),2)
         plan = round(sum((r.plan or 0) for r in summary_rows),2)
         py = round(sum((r.py or 0) for r in summary_rows),2)
@@ -140,16 +144,24 @@ class MetricsService:
         inventory = round(sum((r.inventory_shortage or 0) for r in summary_rows),2)
         stock_fact = round(sum((r.stock_fact or 0) for r in summary_rows),2)
         stock_plan = round(sum((r.stock_plan or 0) for r in summary_rows),2)
+        checks_abs = round(sum((r.checks or 0) for r in summary_rows)*1000, 0)
+        avg_ticket = round(sum((r.avg_ticket or 0) for r in summary_rows)/max(len(summary_rows),1),0)
+        # When sheet already matches period (SQL sales_day / sales_week), do not rescale.
+        day_rev = revenue if period == 'day' else round(revenue/30,2)
+        day_plan = plan if period == 'day' else round(plan/30,2)
+        day_checks = checks_abs if period == 'day' else round(checks_abs/30,0)
+        week_rev = revenue if period == 'week' else round(revenue/4.3,2)
+        week_py = py if period == 'week' else round(py/4.3,2)
         kpis = {
             'day': [
-                KPI(code='revenue_day', label='Выручка за день', value=round(revenue/30,2), unit='mln_rub', plan=round(plan/30,2), delta_pct=round((revenue/plan-1)*100,1) if plan else 0, status_color=self._status(revenue/plan*100 if plan else 0,100,95), hint='Факт vs план'),
-                KPI(code='checks_day', label='Чеки', value=round(sum((r.checks or 0) for r in summary_rows)*1000/30,0), unit='checks', status_color='blue', hint='Дневной поток'),
-                KPI(code='avg_ticket_day', label='Средний чек', value=round(sum((r.avg_ticket or 0) for r in summary_rows)/max(len(summary_rows),1),0), unit='rub', status_color='blue', hint='Средний чек сети / магазина'),
+                KPI(code='revenue_day', label='Выручка за день', value=day_rev, unit='mln_rub', plan=day_plan, delta_pct=round((revenue/plan-1)*100,1) if plan else 0, status_color=self._status(revenue/plan*100 if plan else 0,100,95), hint='Факт vs план'),
+                KPI(code='checks_day', label='Чеки', value=day_checks, unit='checks', status_color='blue', hint='Дневной поток'),
+                KPI(code='avg_ticket_day', label='Средний чек', value=avg_ticket, unit='rub', status_color='blue', hint='Средний чек сети / магазина'),
                 KPI(code='shop_availability', label='Доступность ТЗ', value=round(sum((r.shop_availability or 0) for r in summary_rows)/max(len(summary_rows),1),1), unit='pct', status_color=self._status(sum((r.shop_availability or 0) for r in summary_rows)/max(len(summary_rows),1),95,90), hint='Топовые позиции ТЗ'),
                 KPI(code='production_availability', label='Доступность СП', value=round(sum((r.production_availability or 0) for r in summary_rows)/max(len(summary_rows),1),1), unit='pct', status_color=self._status(sum((r.production_availability or 0) for r in summary_rows)/max(len(summary_rows),1),92,85), hint='Топовые позиции производства'),
             ],
             'week': [
-                KPI(code='revenue_week', label='Выручка за неделю', value=round(revenue/4.3,2), unit='mln_rub', py=round(py/4.3,2), yoy=round((revenue/py-1)*100,1) if py else 0, status_color=self._status(revenue/py*100 if py else 0,102,97), hint='Факт vs LY'),
+                KPI(code='revenue_week', label='Выручка за неделю', value=week_rev, unit='mln_rub', py=week_py, yoy=round((revenue/py-1)*100,1) if py else 0, status_color=self._status(revenue/py*100 if py else 0,102,97), hint='Факт vs LY'),
                 KPI(code='sp_penetration', label='Пенетрация СП', value=round(own_share*1.08,1), unit='pct', status_color=self._status(own_share*1.08,33,28), hint='Чеков с СП / чеков всего'),
                 KPI(code='pascucci_penetration', label='Пенетрация Паскуччи', value=round(max(1.8,own_share*0.22),1), unit='pct', status_color=self._status(max(1.8,own_share*0.22),7,5), hint='Чеков с Паскуччи / чеков всего'),
                 KPI(code='writeoff_pct', label='Списания, % к РТО', value=round(losses/max(revenue,0.01)*100,2), unit='pct', status_color=self._status(losses/max(revenue,0.01)*100,0.8,1.2,reverse=True), hint='Все группы потерь'),
