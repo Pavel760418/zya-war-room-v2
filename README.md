@@ -55,12 +55,20 @@ WARROOM_GATEWAY_TOKEN = "***"   # тот же, что в ~/.config/warroom/gatew
 
 Прямой `DATABASE_URL` на `192.168.2.10` в Cloud **не заработает** без VPN/туннеля к LAN.
 
-Приложение: https://zya-war-room-v2-ay66kuefknxypjxopuwpaj.streamlit.app/
+## Ссылки для открытия дашборда (без логина)
 
-Публичный SQL-дашборд (edge, без Streamlit login):
+**Основная (офис / Wi‑Fi Private)** — отправлять владельцу бизнеса:
+`http://192.168.2.95:8080/`
+
+- Прямой Streamlit War Room, **без Metabase**, без пароля, без токенов в URL.
+- Доступ только с `192.168.2.0/24` и `10.100.0.0/24` (nginx allow/deny).
+- Не открывать `http://81.163.35.181:3000/` (это Metabase → форма логина).
+
+**Резервная публичная** (если вне офисной сети):
 `http://81.163.35.181:3000/warroom/`
 
-> `*.streamlit.app` сейчас отвечает `303` на страницу логина Streamlit (настройка Sharing в Cloud UI). Data-plane (gateway) уже доступен из интернета; после открытия Sharing=Public Cloud начнёт показывать те же данные через gateway.
+Streamlit Cloud (необязательный TODO): https://zya-war-room-v2-ay66kuefknxypjxopuwpaj.streamlit.app/  
+сейчас с Sharing=Private (логин). Чтобы вернуть Cloud без логина — App settings → Sharing → Public.
 
 
 ## Физический маппинг 1С
