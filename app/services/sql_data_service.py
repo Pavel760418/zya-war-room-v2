@@ -11,11 +11,13 @@ from typing import Any, Optional
 
 import pandas as pd
 
-from app.core.settings import get_app_settings, missing_database_secret_keys, redact_error
+from app.core.settings import get_app_settings, get_gateway_settings, missing_database_secret_keys, redact_error
 from app.ingestion.metadata_catalog import known_war_room_physicals
 from app.ingestion.schema import META_SHEET, SCHEMA
 from app.ingestion.sql_extract import CATALOG_QUERIES, PHYSICAL, get_query
 from app.repositories.sql_database import SqlDatabase, SqlStatus
+from app.services.gateway_client import GatewaySettings as ClientGatewaySettings
+from app.services.gateway_client import fetch_gateway_raw
 
 
 @dataclass
@@ -29,13 +31,43 @@ class SqlLoadResult:
 
 
 class SqlDataService:
-    def __init__(self, db: Optional[SqlDatabase] = None):
+    def __init__(self, db: Optional[SqlDatabase] = None, *, use_env_db: bool = True):
         settings = get_app_settings()
         timeout = max(settings.sql_connect_timeout, 60)
-        self.db = db if db is not None else SqlDatabase.from_env(connect_timeout=timeout)
+        if db is not None:
+            self.db = db
+        elif use_env_db:
+            self.db = SqlDatabase.from_env(connect_timeout=timeout)
+        else:
+            self.db = None
 
     def status(self) -> SqlStatus:
         if self.db is None:
+            gw = get_gateway_settings()
+            if gw is not None:
+                try:
+                    from app.services.gateway_client import fetch_gateway_health
+
+                    health = fetch_gateway_health(
+                        ClientGatewaySettings(base_url=gw.url, token=gw.token, timeout_sec=20, retries=2)
+                    )
+                    return SqlStatus(
+                        ok=bool(health.get("sql_ok") or health.get("ok")),
+                        message="SQL gateway: " + ("ok" if health.get("ok") else "degraded"),
+                        server=health.get("server") or gw.url,
+                        database=health.get("database"),
+                        engine="gateway",
+                        error=health.get("error"),
+                        last_success_at=health.get("ts"),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    return SqlStatus(
+                        ok=False,
+                        message="SQL gateway недоступен",
+                        server=gw.url,
+                        error=redact_error(exc),
+                        engine="gateway",
+                    )
             missing = missing_database_secret_keys() or ("DATABASE_URL",)
             return SqlStatus(
                 ok=False,
@@ -62,9 +94,15 @@ class SqlDataService:
         return raw
 
     def load(self) -> SqlLoadResult:
-        status = self.status()
-        now = datetime.now(timezone.utc).isoformat()
-        if not status.ok or self.db is None:
+        # Prefer direct MSSQL on LAN; otherwise use public SQL gateway (Cloud).
+        if self.db is None:
+            gw = get_gateway_settings()
+            if gw is not None:
+                return fetch_gateway_raw(
+                    ClientGatewaySettings(base_url=gw.url, token=gw.token, timeout_sec=90, retries=4)
+                )
+            status = self.status()
+            now = datetime.now(timezone.utc).isoformat()
             raw = self.empty_raw()
             missing = missing_database_secret_keys()
             raw["meta"] = pd.DataFrame(
@@ -84,6 +122,42 @@ class SqlDataService:
                         "недоступен",
                         status.error or status.message,
                         ", ".join(missing) if missing else "—",
+                    ],
+                }
+            )
+            return SqlLoadResult(
+                raw=raw,
+                status=status,
+                warnings=[status.message, status.error or ""],
+                mapping_complete=False,
+                last_success_at=None,
+            )
+
+        status = self.status()
+        now = datetime.now(timezone.utc).isoformat()
+        if not status.ok:
+            # Soft failover to gateway when direct SQL flakes
+            gw = get_gateway_settings()
+            if gw is not None:
+                return fetch_gateway_raw(
+                    ClientGatewaySettings(base_url=gw.url, token=gw.token, timeout_sec=90, retries=4)
+                )
+            raw = self.empty_raw()
+            raw["meta"] = pd.DataFrame(
+                {
+                    META_SHEET.key_col: [
+                        "Название сети",
+                        "Валюта",
+                        "Источник",
+                        "SQL статус",
+                        "SQL ошибка",
+                    ],
+                    META_SHEET.value_col: [
+                        "Зеленое Яблоко",
+                        "RUB",
+                        "sql",
+                        "недоступен",
+                        status.error or status.message,
                     ],
                 }
             )

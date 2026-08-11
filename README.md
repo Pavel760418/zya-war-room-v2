@@ -1,95 +1,76 @@
 # ZYA War Room v2
 
-Операционный кокпит сети «Зеленое Яблоко». **Единственный пользовательский путь данных — MSSQL (1С).**
-Excel остаётся только как внутренняя фикстура для unit-тестов ingestion/метрик.
+Операционный кокпит сети «Зеленое Яблоко». Пользовательский путь данных — **SQL (1С/MSSQL)**.
 
-## Streamlit (продукт)
+## Архитектура: Streamlit Cloud → 1С
+
+```
+Streamlit Community Cloud
+        │  HTTP + bearer token
+        ▼
+Public edge  http://81.163.35.181:3000/warroom-api/   (nginx, host network)
+        │
+        ├─ /warroom-api/*  → 127.0.0.1:8520  warroom-sql-gateway (systemd --user)
+        │                         │
+        │                         ▼
+        │                   MSSQL 192.168.2.10:1433 / retail  (SELECT only)
+        │
+        └─ /*              → 127.0.0.1:3001  Metabase (сохранён на том же :3000)
+```
+
+Почему так: `192.168.2.10` — приватный адрес, из Streamlit Cloud **физически недоступен**.
+На аналитическом хосте (`analitika` / `192.168.2.95`) наружу уже был проброшен порт **3000**.
+Мы подняли на нём edge: Metabase + SQL-gateway, без открытия сырого TDS 1433 в интернет.
+
+### Автовосстановление
+- `warroom-sql-gateway.service` — `Restart=always` (systemd --user, linger enabled)
+- `warroom-sql-gateway-heartbeat.timer` — health каждые 2 минуты → `var/log/gateway_health_last.json`
+- `warroom-edge` (docker) — `restart: unless-stopped`
+- Клиент/драйвер: retry с экспоненциальной задержкой (`WARROOM_SQL_RETRIES`)
+
+### Если пропала связь
+1. `systemctl --user status warroom-sql-gateway.service`
+2. `docker ps | grep warroom-edge`
+3. `curl -s http://127.0.0.1:8520/health` и `curl -s http://127.0.0.1:3000/warroom-api/health`
+4. Логи: `journalctl --user -u warroom-sql-gateway -n 100`
+5. Heartbeat: `cat var/log/gateway_heartbeat.json`
+
+## Streamlit
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-# Secrets: скопируйте .streamlit/secrets.toml.example → .streamlit/secrets.toml
-# или экспортируйте DATABASE_URL / положите ~/.config/warroom/warroom.env
 streamlit run streamlit_app.py
 ```
 
-Health-check: `curl -s http://127.0.0.1:8501/_stcore/health` → `ok`.
+На LAN используется `DATABASE_URL` из `~/.config/warroom/warroom.env`.
+В Cloud — gateway URL/token (`st.secrets` или встроенный private-bridge `app/core/_cloud_bridge.py`).
 
-### Физический маппинг 1С
-
-Источник истины: `data/catalog/StrukturaKhraneniiaBazyDannykh.xlsx` (лист TDSheet).
-Загрузчик: `app/ingestion/metadata_catalog.py`. SQL: `app/ingestion/sql_extract.py`.
-
-| Логическое имя | Физическая таблица |
-|---|---|
-| РегистрНакопления.Продажи / ВыручкаИСебестоимостьПродаж | `_AccumRg6691` |
-| ТоварыНаСкладах / ОстаткиТоваровКомпании | `_AccumRg6601` |
-| Документ.БюджетПродаж (+ ТЧ) | `_Document107` / `_Document107_VT1803` |
-| Документ.БюджетНакладных… (+ ТЧ) | `_Document105` / `_Document105_VT1724` |
-| Документ.СписаниеТоваров (+ ТЧ) | `_Document172` / `_Document172_VT4675` |
-| Документ.Инвентаризация (+ ТЧ) | `_Document124` / `_Document124_VT2532` |
-| Справочник.ПодразделенияКомпании (магазины) | `_Reference64` |
-| Справочник.Номенклатура | `_Reference58` |
-
-### Production checklist (Streamlit Cloud → Settings → Secrets)
-
-Вставьте **точный** блок (подставьте реальные host/user/password; хост 1С должен быть
-доступен из Cloud — VPN/туннель/публичный endpoint):
+### Secrets (Cloud UI)
 
 ```toml
-# === War Room MSSQL (1С) — обязательные Secrets ===
-DATABASE_URL = "mssql+pymssql://USER:PASSWORD@HOST:1433/DATABASE"
-
-# Альтернатива отдельными ключами (если не используете DATABASE_URL):
-# DB_HOST = "192.168.2.10"
-# DB_PORT = "1433"
-# DB_NAME = "retail"
-# DB_USER = "readonly_warroom"
-# DB_PASSWORD = "********"
-
-# DATA_SOURCE_MODE = "mssql"
-# WARROOM_SQL_TIMEOUT = "60"
+WARROOM_GATEWAY_URL = "http://81.163.35.181:3000/warroom-api"
+WARROOM_GATEWAY_TOKEN = "***"   # тот же, что в ~/.config/warroom/gateway.env
 ```
 
-Шаблон также лежит в `.streamlit/secrets.toml.example`.
+Прямой `DATABASE_URL` на `192.168.2.10` в Cloud **не заработает** без VPN/туннеля к LAN.
 
-После `git push` в `main` Cloud пересоберёт приложение автоматически.
-URL: https://zya-war-room-v2-ay66kuefknxypjxopuwpaj.streamlit.app/
+Приложение: https://zya-war-room-v2-ay66kuefknxypjxopuwpaj.streamlit.app/
 
-Без Secrets приложение показывает оформленный экран ошибки подключения
-(`missing_database_url`) и **не** переключается на Excel.
+## Физический маппинг 1С
 
-### Локальный / LAN запуск
+`data/catalog/StrukturaKhraneniiaBazyDannykh.xlsx` → `app/ingestion/metadata_catalog.py`
 
-На сервере аналитики (`192.168.2.95`) используйте `EnvironmentFile` /
-`~/.config/warroom/warroom.env` с `DATABASE_URL` на `192.168.2.10:1433/retail`.
+| Логическое | Физическое |
+|---|---|
+| РегистрНакопления.Продажи | `_AccumRg6691` |
+| ТоварыНаСкладах | `_AccumRg6601` |
+| Документ.СписаниеТоваров | `_Document172` |
+| Документ.Инвентаризация | `_Document124` |
+| Справочник.Магазины | `_Reference64` |
 
-Опциональный тестовый MSSQL (если прод недоступен):
-
-```bash
-docker compose -f docker-compose.mssql.yml up -d
-```
-
-### Зависимости
-
-- `requirements.txt` — Streamlit + `pymssql` + openpyxl/plotly (Cloud и LAN).
-- `requirements-server.txt` / `requirements-dev.txt` — расширенные наборы.
-- Рекомендуемый Python на Cloud: **3.13**.
-
-### Тесты
+## Тесты
 
 ```bash
-pip install -r requirements-dev.txt
 pytest -q
-```
-
-Excel-фикстуры проверяют пайплайн маппинга; `tests/test_sql_path.py` —
-физический каталог + mock SQL + опциональный live MSSQL.
-
-## FastAPI (legacy)
-
-```bash
-pip install -r requirements-fastapi.txt
-uvicorn app.main:app --reload
 ```

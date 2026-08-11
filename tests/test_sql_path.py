@@ -91,6 +91,26 @@ def test_sql_data_service_mock_connection_builds_dashboard():
     assert len(dash.store_table) >= 1
 
 
+def test_gateway_settings_available_via_bridge():
+    from app.core.settings import get_gateway_settings, missing_database_secret_keys
+
+    gw = get_gateway_settings()
+    assert gw is not None
+    assert gw.url.startswith("http")
+    assert gw.token
+    # Bridge removes missing_database_url blocker for Cloud
+    assert missing_database_secret_keys() == ()
+
+
+def test_sql_retry_env_defaults_documented():
+    import os
+
+    from app.repositories import sql_database as mod
+
+    assert hasattr(mod.SqlDatabase, "connection")
+    assert os.environ.get("WARROOM_SQL_RETRIES", "4")
+
+
 @pytest.mark.integration
 def test_live_mssql_optional():
     """Runs only when DATABASE_URL is set and reachable."""

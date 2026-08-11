@@ -1,0 +1,16 @@
+# Public edge on :3000 — Metabase + War Room SQL gateway path.
+# Metabase itself must listen on 127.0.0.1:3001 (see ~/metabase-deploy).
+services:
+  edge:
+    image: nginx:1.27-alpine
+    container_name: warroom-edge
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/warroom-api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

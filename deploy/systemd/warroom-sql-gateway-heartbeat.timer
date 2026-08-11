@@ -1,0 +1,11 @@
+[Unit]
+Description=War Room SQL gateway heartbeat every 2 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Unit=warroom-sql-gateway-heartbeat.service
+
+[Install]
+WantedBy=timers.target

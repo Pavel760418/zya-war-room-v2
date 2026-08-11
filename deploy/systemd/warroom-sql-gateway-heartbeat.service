@@ -1,0 +1,8 @@
+[Unit]
+Description=War Room SQL gateway heartbeat probe
+After=warroom-sql-gateway.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/home/andr/.config/warroom/gateway.env
+ExecStart=/usr/bin/curl -fsS --max-time 20 http://127.0.0.1:8520/health -o /home/andr/apps/zya-war-room-v2/var/log/gateway_health_last.json

@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import os
 from typing import Any, Iterable, Iterator, Mapping, Optional, Sequence, Union
 
 import pandas as pd
@@ -77,14 +78,29 @@ class SqlDatabase:
 
     @contextmanager
     def connection(self, database: Optional[str] = None) -> Iterator[Any]:
+        import time
+
         import pymssql
 
-        conn = pymssql.connect(**self._connect_kwargs(database=database))
-        try:
-            yield conn
-            self._last_success_at = datetime.now(timezone.utc)
-        finally:
-            conn.close()
+        attempts = max(1, int(os.environ.get("WARROOM_SQL_RETRIES", "4")))
+        delay = float(os.environ.get("WARROOM_SQL_RETRY_DELAY", "0.6"))
+        last_exc: Optional[BaseException] = None
+        for attempt in range(1, attempts + 1):
+            try:
+                conn = pymssql.connect(**self._connect_kwargs(database=database))
+                try:
+                    yield conn
+                    self._last_success_at = datetime.now(timezone.utc)
+                finally:
+                    conn.close()
+                return
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if attempt >= attempts:
+                    break
+                time.sleep(min(delay * (2 ** (attempt - 1)), 8.0))
+        assert last_exc is not None
+        raise last_exc
 
     @staticmethod
     def _assert_readonly(sql: str) -> str:
