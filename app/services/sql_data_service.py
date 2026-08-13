@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 import math
 import os
@@ -37,12 +38,26 @@ class SqlLoadResult:
     confidence_notes: list[str] = field(default_factory=list)
 
 
+def _is_streamlit_cloud() -> bool:
+    if (os.environ.get("STREAMLIT_RUNTIME_ENV") or "").strip().lower() == "cloud":
+        return True
+    if (os.environ.get("STREAMLIT_SHARING_MODE") or "").strip().lower() in {"streamlit", "cloud"}:
+        return True
+    return Path("/mount/src").is_dir()
+
+
 def _resolve_source_mode() -> str:
     """LAN: ``WARROOM_DATA_SOURCE=cache`` из systemd. Cloud: sqlite snapshot в data/cloud_snapshot."""
     raw = (os.environ.get("WARROOM_DATA_SOURCE") or "").strip().lower()
+    # Streamlit Cloud often injects secrets into env; public :3000 gateway is Metabase HTML.
+    if _is_streamlit_cloud():
+        try:
+            if LocalCacheStore().exists():
+                return "cache"
+        except OSError:
+            pass
     if raw:
         return raw
-    # Snapshot / local sqlite wins over Streamlit secrets that still point at broken public :3000.
     try:
         if LocalCacheStore().exists():
             return "cache"
