@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from typing import List, Literal, Optional
 
 StatusColor = Literal['green', 'yellow', 'red', 'blue', 'neutral']
-RiskLevel = Literal['low', 'medium', 'high']
+RiskLevel = Literal['low', 'medium', 'high', 'низкий', 'средний', 'высокий']
 Period = Literal['day', 'week', 'month']
 Scope = Literal['network', 'store']
 
@@ -104,6 +104,8 @@ class StoreDrilldown(_Model):
     reasons: List[str]
     local_risks: List[AlertItem]
     actions: List[ActionItem]
+    loss_drivers: Optional[List[LossItem]] = None
+    network_context: Optional[List[str]] = None
 
 
 @dataclass(kw_only=True)

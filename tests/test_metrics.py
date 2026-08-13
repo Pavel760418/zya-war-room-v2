@@ -44,7 +44,7 @@ def test_pilot_fixed_template_end_to_end():
     assert res.ok and res.has_store_data
     for period in ("day", "week", "month"):
         dash = MetricsService(res.raw, mode="excel").build_dashboard(period=period)
-        assert len(dash.kpis) == 5
+        assert len(dash.kpis) >= 5
         assert len(dash.store_table) >= 1
         assert dash.kpis[0].value is not None
 

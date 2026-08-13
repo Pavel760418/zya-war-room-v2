@@ -1,0 +1,21 @@
+[Unit]
+Description=МегаМетрики — синхронизация кэша из 1С (MSSQL→SQLite)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Для system-unit раскомментируйте User/Group; для user-unit — оставьте без них.
+# User=andr
+# Group=andr
+WorkingDirectory=/home/andr/apps/zya-war-room-v2
+EnvironmentFile=-/home/andr/.config/warroom/warroom.env
+Environment=WARROOM_DATA_SOURCE=sql
+Environment=WARROOM_CACHE_DIR=/home/andr/apps/zya-war-room-v2/var/cache
+Environment=WARROOM_SYNC_LOG_DIR=/home/andr/apps/zya-war-room-v2/var/log
+ExecStart=/home/andr/apps/zya-war-room-v2/.venv/bin/python /home/andr/apps/zya-war-room-v2/scripts/sync_from_1c.py
+Nice=10
+SuccessExitStatus=0 2 3 4
+
+[Install]
+WantedBy=multi-user.target

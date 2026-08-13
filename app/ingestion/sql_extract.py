@@ -3,17 +3,20 @@
 Physical mapping source of truth:
   ``data/catalog/StrukturaKhraneniiaBazyDannykh.xlsx`` via ``metadata_catalog``.
 
-Examples (logical → physical):
-  РегистрНакопления.Продажи → ``_AccumRg6691``
-  РегистрНакопления.ОстаткиТоваровКомпании / ТоварыНаСкладах → ``_AccumRg6601``
-  Документ.БюджетПродаж → ``_Document107`` (+ ``_Document107_VT1803``)
-  Документ.СписаниеТоваров → ``_Document172`` (+ ``_Document172_VT4675``)
-  Документ.Инвентаризация → ``_Document124`` (+ ``_Document124_VT2532``)
-  Документ.БюджетНакладныхРасходовИДоходов → ``_Document105`` (+ ``_Document105_VT1724``)
-  Справочник.ПодразделенияКомпании (магазины) → ``_Reference64``
-  Справочник.Номенклатура → ``_Reference58``
+Confirmed mappings (catalog + live SELECT):
+  РегистрНакопления.Продажи → ``_AccumRg6691`` (номенклатурная выручка / СП%)
+  Розничные чеки/выручка смены → ``_Document119`` + ``_Document119_VT2313``
+    (Документ.ЗакрытиеСмены.СнятыеКассы: ``_Fld2319``=число чеков, ``_Fld6977``=выручка кассы;
+     магазин ``_Fld2267RRef``→``_Reference64``)
+  НЕ использовать ``_Document156`` для чеков — это ПоступлениеТоваров (REJECTED)
+  Статьи списания → ``_Document172._Fld4669RRef``→``_Reference82``
+  Остатки → ``_AccumRg6601`` (склад ``_Fld6603RRef``→``_Reference76``)
+  Свойства номенклатуры → ``_InfoRg5758`` + ``_Chrc339``
+  Списание → ``_Document172`` / ``_Document172_VT4675``
+  Инвентаризация → ``_Document124`` / ``_Document124_VT2532``
+  Папка СП → ``_Reference58`` код ``00107646`` («Производство Зеленого яблока»)
 
-Target DBMS: Microsoft SQL Server (pymssql). Year offset for ``_Period`` / dates: 2000.
+Target DBMS: Microsoft SQL Server (pymssql). Year offset: 2000.
 """
 from __future__ import annotations
 
@@ -33,10 +36,24 @@ __all__ = [
     "list_target_sheets",
     "adapt_catalog_sql_to_mssql",
     "to_pymssql_params",
+    "SP_FOLDER_CODE",
+    "PROP_TZ",
+    "PROP_SP",
+    "NON_STORE_NAMES",
 ]
 
 DBMS = "mssql"
 YEAR_OFFSET = 2000
+SP_FOLDER_CODE = "00107646"
+PROP_TZ = "Корзина Топ 200"
+PROP_SP = "Корзина Производство"
+NON_STORE_NAMES = (
+    "РЦ",
+    "Ритейл",
+    "Ритейл (мини)",
+    "Все товары",
+    "Фабрика-кухня",
+)
 
 PARAM_NAMES = (
     "date_from",
@@ -49,9 +66,8 @@ PARAM_NAMES = (
 
 PHYSICAL = known_war_room_physicals()
 
-# Short aliases used inside SQL builders
-T_SALES = PHYSICAL["РегистрНакопления.Продажи"]  # _AccumRg6691
-T_STOCK = PHYSICAL["ТоварыНаСкладах"]  # _AccumRg6601
+T_SALES = PHYSICAL["РегистрНакопления.Продажи"]
+T_STOCK = PHYSICAL["ТоварыНаСкладах"]
 T_BUDGET_SALES = PHYSICAL["Документ.БюджетПродаж"]
 T_BUDGET_SALES_VT = PHYSICAL["Документ.БюджетПродаж.Товары"]
 T_BUDGET_OPEX = PHYSICAL["Документ.БюджетНакладныхРасходовИДоходов"]
@@ -62,7 +78,19 @@ T_INV = PHYSICAL["Документ.Инвентаризация"]
 T_INV_VT = PHYSICAL["Документ.Инвентаризация.Товары"]
 T_STORE = PHYSICAL["Справочник.Магазины"]
 T_NOMEN = PHYSICAL["Справочник.Номенклатура"]
-T_PROFIT = PHYSICAL["ВыручкаИСебестоимостьПродаж"]  # same as sales register
+T_PROFIT = PHYSICAL["ВыручкаИСебестоимостьПродаж"]
+T_SHIFT = PHYSICAL.get("Документ.ЗакрытиеСмены", "_Document119")
+T_SHIFT_CASH = PHYSICAL.get("Документ.ЗакрытиеСмены.СнятыеКассы", "_Document119_VT2313")
+T_SHIFT_GOODS = PHYSICAL.get("Документ.ЗакрытиеСмены.Товары", "_Document119_VT2284")
+T_CHECKS = T_SHIFT  # alias for sales/check extract
+T_EXPENSE_ITEMS = PHYSICAL.get("Справочник.СтатьиДоходовИРасходов", "_Reference82")
+T_WAREHOUSE = PHYSICAL.get("Справочник.Склады", "_Reference76")
+T_PROPS = PHYSICAL.get("РегистрСведений.ЗначенияСвойствОбъектов", "_InfoRg5758")
+T_PROP_KINDS = PHYSICAL.get("ПланВидовХарактеристик.СвойстваОбъектов", "_Chrc339")
+T_STOCK_TOTALS = PHYSICAL.get(
+    "РегистрНакопления.ОстаткиТоваровКомпании.Остатки",
+    "_AccumRgT6616",
+)
 
 
 @dataclass(frozen=True)
@@ -77,7 +105,6 @@ class SqlExtractQuery:
 
 
 def adapt_catalog_sql_to_mssql(sql: str) -> str:
-    """Legacy helper kept for tests; physical queries below are already T-SQL."""
     out = sql
     out = out.replace(" = TRUE", " = 1").replace("= TRUE", "= 1")
     out = out.replace(" ILIKE ", " LIKE ")
@@ -98,165 +125,397 @@ _ISO_WEEK = (
 )
 _SALE_DATE = f"CAST(DATEADD(year, -{YEAR_OFFSET}, t._Period) AS date)"
 _DOC_DATE = f"CAST(DATEADD(year, -{YEAR_OFFSET}, d._Date_Time) AS date)"
+_CHECK_DATE = f"CAST(DATEADD(year, -{YEAR_OFFSET}, d._Date_Time) AS date)"
+_STORE_FROM_CHECK = "LTRIM(RTRIM(CAST(s._Description AS nvarchar(255))))"
+_STORE_FILTER = (
+    f"AND s._Marked = 0x00 "
+    f"AND {_STORE_FROM_CHECK} NOT IN ("
+    + ", ".join(f"N'{n}'" for n in NON_STORE_NAMES)
+    + ") "
+    f"AND {_STORE_FROM_CHECK} NOT LIKE N'РЦ %' "
+    f"AND {_STORE_FROM_CHECK} NOT LIKE N'не исп%'"
+)
+_WH_TO_STORE = (
+    "LTRIM(RTRIM(CAST(s._Description AS nvarchar(255))))"
+)
+# Склад → магазин через _Reference76._Fld1140RRef (подтверждено SELECT)
+_WH_JOIN_STORE = f"""
+INNER JOIN [dbo].[{T_WAREHOUSE}] AS w ON w._IDRRef = t._Fld6603RRef
+INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = w._Fld1140RRef
+""".strip()
+_SP_NOMEN_CTE = f"""
+roots AS (
+  SELECT _IDRRef FROM [dbo].[{T_NOMEN}]
+  WHERE LTRIM(RTRIM(CAST(_Code AS nvarchar(50)))) = N'{SP_FOLDER_CODE}'
+),
+lvl1 AS (
+  SELECT c._IDRRef FROM [dbo].[{T_NOMEN}] c
+  INNER JOIN roots r ON c._ParentIDRRef = r._IDRRef WHERE c._Marked = 0x00
+),
+lvl2 AS (
+  SELECT c._IDRRef FROM [dbo].[{T_NOMEN}] c
+  INNER JOIN lvl1 r ON c._ParentIDRRef = r._IDRRef WHERE c._Marked = 0x00
+),
+lvl3 AS (
+  SELECT c._IDRRef FROM [dbo].[{T_NOMEN}] c
+  INNER JOIN lvl2 r ON c._ParentIDRRef = r._IDRRef WHERE c._Marked = 0x00
+),
+sp_nomen AS (
+  SELECT _IDRRef FROM roots
+  UNION SELECT _IDRRef FROM lvl1
+  UNION SELECT _IDRRef FROM lvl2
+  UNION SELECT _IDRRef FROM lvl3
+)
+""".strip()
 
-
-# --- sales (Продажи = _AccumRg6691; магазины = _Reference64) ---
 _SQL_SALES_DAY = f"""
--- продажи_день | РегистрНакопления.Продажи → {T_SALES}
--- Справочник.Магазины → {T_STORE} | БюджетПродаж → {T_BUDGET_SALES}/{T_BUDGET_SALES_VT}
+-- продажи_день | ЗакрытиеСмены {T_SHIFT} + СнятыеКассы {T_SHIFT_CASH}
+-- _Fld2319 = число чеков кассы (VERIFIED), _Fld6977 = выручка кассы
+-- магазин = _Fld2267RRef → {T_STORE}
 SELECT
-    {_SALE_DATE} AS [Дата],
-    LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
-    SUM(CAST(t._Fld6704 AS float)) AS [Выручка факт],
+    {_CHECK_DATE} AS [Дата],
+    {_STORE_FROM_CHECK} AS [Магазин],
+    SUM(CAST(vt._Fld6977 AS float)) AS [Выручка факт],
     CAST(0 AS float) AS [Выручка план],
-    COUNT(DISTINCT t._RecorderRRef) AS [Количество чеков]
-FROM [dbo].[{T_SALES}] AS t
-INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = t._Fld6692RRef
-WHERE t._Active = 0x01
-  AND t._Period >= DATEADD(year, {YEAR_OFFSET}, CAST(:date_from AS datetime))
-  AND t._Period <  DATEADD(year, {YEAR_OFFSET}, CAST(:date_to AS datetime))
-  AND s._Marked = 0x00
-GROUP BY {_SALE_DATE}, LTRIM(RTRIM(CAST(s._Description AS nvarchar(255))))
+    SUM(CAST(vt._Fld2319 AS float)) AS [Количество чеков]
+FROM [dbo].[{T_SHIFT}] AS d
+INNER JOIN [dbo].[{T_SHIFT_CASH}] AS vt ON vt._Document119_IDRRef = d._IDRRef
+INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = d._Fld2267RRef
+WHERE d._Posted = 0x01
+  AND d._Date_Time >= DATEADD(year, {YEAR_OFFSET}, CAST(:date_from AS datetime))
+  AND d._Date_Time <  DATEADD(year, {YEAR_OFFSET}, CAST(:date_to AS datetime))
+  {_STORE_FILTER}
+GROUP BY {_CHECK_DATE}, {_STORE_FROM_CHECK}
 ORDER BY [Дата], [Магазин];
 """.strip()
 
 _SQL_SALES_WEEK = f"""
--- продажи_неделя | {T_SALES} + {T_STORE}
 SELECT
-    {_ISO_WEEK.format(d=_SALE_DATE)} AS [Неделя],
-    LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
-    SUM(CAST(t._Fld6704 AS float)) AS [Выручка факт],
+    {_ISO_WEEK.format(d=_CHECK_DATE)} AS [Неделя],
+    {_STORE_FROM_CHECK} AS [Магазин],
+    SUM(CAST(vt._Fld6977 AS float)) AS [Выручка факт],
     CAST(0 AS float) AS [Выручка план],
-    COUNT(DISTINCT t._RecorderRRef) AS [Количество чеков]
-FROM [dbo].[{T_SALES}] AS t
-INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = t._Fld6692RRef
-WHERE t._Active = 0x01
-  AND t._Period >= DATEADD(year, {YEAR_OFFSET}, CAST(:week_from AS datetime))
-  AND t._Period <  DATEADD(year, {YEAR_OFFSET}, CAST(:week_to AS datetime))
-  AND s._Marked = 0x00
-GROUP BY {_ISO_WEEK.format(d=_SALE_DATE)}, LTRIM(RTRIM(CAST(s._Description AS nvarchar(255))))
+    SUM(CAST(vt._Fld2319 AS float)) AS [Количество чеков]
+FROM [dbo].[{T_SHIFT}] AS d
+INNER JOIN [dbo].[{T_SHIFT_CASH}] AS vt ON vt._Document119_IDRRef = d._IDRRef
+INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = d._Fld2267RRef
+WHERE d._Posted = 0x01
+  AND d._Date_Time >= DATEADD(year, {YEAR_OFFSET}, CAST(:week_from AS datetime))
+  AND d._Date_Time <  DATEADD(year, {YEAR_OFFSET}, CAST(:week_to AS datetime))
+  {_STORE_FILTER}
+GROUP BY {_ISO_WEEK.format(d=_CHECK_DATE)}, {_STORE_FROM_CHECK}
 ORDER BY [Неделя], [Магазин];
 """.strip()
 
 _SQL_SALES_MONTH = f"""
--- продажи_месяц | {T_SALES} + {T_STORE}
 SELECT
-    FORMAT({_SALE_DATE}, 'yyyy-MM') AS [Месяц],
-    LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
-    SUM(CAST(t._Fld6704 AS float)) AS [Выручка факт],
+    FORMAT({_CHECK_DATE}, 'yyyy-MM') AS [Месяц],
+    {_STORE_FROM_CHECK} AS [Магазин],
+    SUM(CAST(vt._Fld6977 AS float)) AS [Выручка факт],
     CAST(0 AS float) AS [Выручка план],
-    COUNT(DISTINCT t._RecorderRRef) AS [Количество чеков]
-FROM [dbo].[{T_SALES}] AS t
-INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = t._Fld6692RRef
-WHERE t._Active = 0x01
-  AND t._Period >= DATEADD(year, {YEAR_OFFSET}, CAST(:month_from AS datetime))
-  AND t._Period <  DATEADD(year, {YEAR_OFFSET}, CAST(:month_to AS datetime))
-  AND s._Marked = 0x00
-GROUP BY FORMAT({_SALE_DATE}, 'yyyy-MM'), LTRIM(RTRIM(CAST(s._Description AS nvarchar(255))))
+    SUM(CAST(vt._Fld2319 AS float)) AS [Количество чеков]
+FROM [dbo].[{T_SHIFT}] AS d
+INNER JOIN [dbo].[{T_SHIFT_CASH}] AS vt ON vt._Document119_IDRRef = d._IDRRef
+INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = d._Fld2267RRef
+WHERE d._Posted = 0x01
+  AND d._Date_Time >= DATEADD(year, {YEAR_OFFSET}, CAST(:month_from AS datetime))
+  AND d._Date_Time <  DATEADD(year, {YEAR_OFFSET}, CAST(:month_to AS datetime))
+  {_STORE_FILTER}
+GROUP BY FORMAT({_CHECK_DATE}, 'yyyy-MM'), {_STORE_FROM_CHECK}
 ORDER BY [Месяц], [Магазин];
 """.strip()
 
+_NON = ", ".join(f"N'{n}'" for n in NON_STORE_NAMES)
+# Нетто-остаток ниже порога = шум float / встречные движения, не «есть на полке».
+_AVAIL_QTY_EPS = "0.001"
+_AVAIL_STORE_OK = (
+    f"{_WH_TO_STORE} NOT IN ({_NON}) "
+    f"AND {_WH_TO_STORE} NOT LIKE N'РЦ%' "
+    f"AND {_WH_TO_STORE} NOT LIKE N'не исп%' "
+    f"AND s._Marked = 0x00"
+)
+_AVAIL_CTE = f"""
+basket_tz AS (
+  SELECT DISTINCT r._Fld5759_RRRef AS nomen
+  FROM [dbo].[{T_PROPS}] AS r
+  INNER JOIN [dbo].[{T_PROP_KINDS}] AS p ON p._IDRRef = r._Fld5760RRef
+  WHERE p._Description = N'{PROP_TZ}' AND CAST(r._Fld5761_L AS int) = 1
+),
+basket_sp AS (
+  SELECT DISTINCT r._Fld5759_RRRef AS nomen
+  FROM [dbo].[{T_PROPS}] AS r
+  INNER JOIN [dbo].[{T_PROP_KINDS}] AS p ON p._IDRRef = r._Fld5760RRef
+  WHERE p._Description = N'{PROP_SP}' AND CAST(r._Fld5761_L AS int) = 1
+),
+basket AS (
+  SELECT nomen, N'ТЗ' AS basket FROM basket_tz
+  UNION
+  SELECT nomen, N'СП' FROM basket_sp
+),
+wh AS (
+  SELECT
+    w._IDRRef AS warehouse,
+    {_WH_TO_STORE} AS store_name
+  FROM [dbo].[{T_WAREHOUSE}] AS w
+  INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = w._Fld1140RRef
+  WHERE {_AVAIL_STORE_OK}
+),
+bal AS (
+  SELECT
+    t._Fld6602RRef AS nomen,
+    t._Fld6603RRef AS warehouse,
+    SUM(CASE WHEN t._RecordKind = 0 THEN CAST(t._Fld6607 AS float)
+             ELSE -CAST(t._Fld6607 AS float) END) AS qty
+  FROM [dbo].[{T_STOCK}] AS t
+  WHERE t._Active = 0x01
+    AND t._Period < DATEADD(year, {YEAR_OFFSET}, CAST(:week_to AS datetime))
+    AND t._Period >= DATEADD(year, {YEAR_OFFSET}, DATEADD(day, -120, CAST(:week_to AS datetime)))
+    AND t._Fld6602RRef IN (SELECT nomen FROM basket)
+  GROUP BY t._Fld6602RRef, t._Fld6603RRef
+),
+store_qty AS (
+  SELECT
+    wh.store_name,
+    bal.nomen,
+    SUM(bal.qty) AS qty
+  FROM wh
+  INNER JOIN bal ON bal.warehouse = wh.warehouse
+  GROUP BY wh.store_name, bal.nomen
+),
+sold_sp AS (
+  SELECT
+    {_WH_TO_STORE} AS store_name,
+    t._Fld6693RRef AS nomen,
+    SUM(CAST(t._Fld6707 AS float)) AS amt
+  FROM [dbo].[{T_SALES}] AS t
+  INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = t._Fld6692RRef
+  WHERE {_AVAIL_STORE_OK}
+    AND t._Period >= DATEADD(year, {YEAR_OFFSET}, CAST(:week_from AS datetime))
+    AND t._Period <  DATEADD(year, {YEAR_OFFSET}, CAST(:week_to AS datetime))
+    AND t._Fld6693RRef IN (SELECT nomen FROM basket_sp)
+  GROUP BY {_WH_TO_STORE}, t._Fld6693RRef
+  HAVING SUM(CAST(t._Fld6707 AS float)) > {_AVAIL_QTY_EPS}
+)
+""".strip()
+
 _SQL_AVAILABILITY = f"""
--- доступность_неделя | остатки {T_STOCK} (ТоварыНаСкладах → ОстаткиТоваровКомпании)
--- Полноценная матрица ТЗ/СП в метаданных отсутствует — отдаём покрытие остатков > 0.
+-- ТЗ: SKU корзины с нетто-остатком на конец периода > {_AVAIL_QTY_EPS}.
+-- СП: SKU корзины с продажами за период (week_from…week_to).
+WITH {_AVAIL_CTE},
+avail_stores AS (
+  SELECT DISTINCT store_name FROM store_qty
+  UNION
+  SELECT DISTINCT store_name FROM sold_sp
+)
 SELECT
-    {_ISO_WEEK.format(d=f'CAST(DATEADD(year, -{YEAR_OFFSET}, t._Period) AS date)')} AS [Неделя],
-    LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
-    COUNT(DISTINCT t._Fld6602RRef) AS [Топ ТЗ всего позиций],
-    COUNT(DISTINCT CASE WHEN CAST(t._Fld6607 AS float) > 0 THEN t._Fld6602RRef END) AS [Топ ТЗ доступно позиций],
-    COUNT(DISTINCT t._Fld6602RRef) AS [Топ СП всего позиций],
-    COUNT(DISTINCT CASE WHEN CAST(t._Fld6607 AS float) > 0 THEN t._Fld6602RRef END) AS [Топ СП доступно позиций]
-FROM [dbo].[{T_STOCK}] AS t
-INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = t._Fld6604RRef
-WHERE t._Active = 0x01
-  AND t._Period >= DATEADD(year, {YEAR_OFFSET}, CAST(:week_from AS datetime))
-  AND t._Period <  DATEADD(year, {YEAR_OFFSET}, CAST(:week_to AS datetime))
-GROUP BY {_ISO_WEEK.format(d=f'CAST(DATEADD(year, -{YEAR_OFFSET}, t._Period) AS date)')},
-         LTRIM(RTRIM(CAST(s._Description AS nvarchar(255))))
-ORDER BY [Неделя], [Магазин];
+    {_ISO_WEEK.format(d='CAST(DATEADD(day, -1, CAST(:week_to AS date)) AS date)')} AS [Неделя],
+    a.store_name AS [Магазин],
+    (SELECT COUNT(*) FROM basket_tz) AS [Топ ТЗ всего позиций],
+    (
+      SELECT COUNT(DISTINCT sq.nomen)
+      FROM store_qty AS sq
+      INNER JOIN basket_tz AS tz ON tz.nomen = sq.nomen
+      WHERE sq.store_name = a.store_name AND sq.qty > {_AVAIL_QTY_EPS}
+    ) AS [Топ ТЗ доступно позиций],
+    (SELECT COUNT(*) FROM basket_sp) AS [Топ СП всего позиций],
+    (
+      SELECT COUNT(DISTINCT ssp.nomen)
+      FROM sold_sp AS ssp
+      WHERE ssp.store_name = a.store_name
+    ) AS [Топ СП доступно позиций]
+FROM avail_stores AS a
+ORDER BY [Магазин];
+""".strip()
+
+_SQL_AVAILABILITY_SKU = f"""
+-- ТЗ: флаг по остатку. СП: флаг по продажам за период.
+WITH {_AVAIL_CTE},
+stores AS (
+  SELECT {_WH_TO_STORE} AS store_name
+  FROM [dbo].[{T_STORE}] AS s
+  WHERE {_AVAIL_STORE_OK}
+)
+SELECT
+    stores.store_name AS [Магазин],
+    LTRIM(RTRIM(CAST(n._Code AS nvarchar(50)))) AS [Артикул],
+    LTRIM(RTRIM(CAST(n._Description AS nvarchar(255)))) AS [Номенклатура],
+    basket.basket AS [Корзина],
+    CAST(ISNULL(store_qty.qty, 0) AS float) AS [Остаток],
+    CAST(ISNULL(sold_sp.amt, 0) AS float) AS [Продажи],
+    CAST(
+      CASE
+        WHEN basket.basket = N'ТЗ' AND ISNULL(store_qty.qty, 0) > {_AVAIL_QTY_EPS} THEN 1
+        WHEN basket.basket = N'СП' AND ISNULL(sold_sp.amt, 0) > {_AVAIL_QTY_EPS} THEN 1
+        ELSE 0
+      END AS int
+    ) AS [В наличии]
+FROM stores
+CROSS JOIN basket
+LEFT JOIN [dbo].[{T_NOMEN}] AS n ON n._IDRRef = basket.nomen
+LEFT JOIN store_qty
+  ON store_qty.store_name = stores.store_name
+ AND store_qty.nomen = basket.nomen
+LEFT JOIN sold_sp
+  ON sold_sp.store_name = stores.store_name
+ AND sold_sp.nomen = basket.nomen
+ORDER BY [Магазин], [Корзина], [Номенклатура];
+""".strip()
+
+_SQL_AVAILABILITY_SP_DAY = f"""
+-- Ежедневные продажи SKU корзины СП — для пересчёта доступности СП в выбранном периоде.
+WITH basket_sp AS (
+  SELECT DISTINCT r._Fld5759_RRRef AS nomen
+  FROM [dbo].[{T_PROPS}] AS r
+  INNER JOIN [dbo].[{T_PROP_KINDS}] AS p ON p._IDRRef = r._Fld5760RRef
+  WHERE p._Description = N'{PROP_SP}' AND CAST(r._Fld5761_L AS int) = 1
+)
+SELECT
+    CAST(DATEADD(year, -{YEAR_OFFSET}, t._Period) AS date) AS [Дата],
+    {_WH_TO_STORE} AS [Магазин],
+    LTRIM(RTRIM(CAST(n._Code AS nvarchar(50)))) AS [Артикул],
+    LTRIM(RTRIM(CAST(n._Description AS nvarchar(255)))) AS [Номенклатура],
+    SUM(CAST(t._Fld6707 AS float)) AS [Продажи]
+FROM [dbo].[{T_SALES}] AS t
+INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = t._Fld6692RRef
+INNER JOIN basket_sp AS b ON b.nomen = t._Fld6693RRef
+INNER JOIN [dbo].[{T_NOMEN}] AS n ON n._IDRRef = t._Fld6693RRef
+WHERE {_AVAIL_STORE_OK}
+  AND t._Period >= DATEADD(year, {YEAR_OFFSET}, CAST(:date_from AS datetime))
+  AND t._Period <  DATEADD(year, {YEAR_OFFSET}, CAST(:date_to AS datetime))
+GROUP BY
+    CAST(DATEADD(year, -{YEAR_OFFSET}, t._Period) AS date),
+    {_WH_TO_STORE},
+    LTRIM(RTRIM(CAST(n._Code AS nvarchar(50)))),
+    LTRIM(RTRIM(CAST(n._Description AS nvarchar(255))))
+HAVING SUM(CAST(t._Fld6707 AS float)) > {_AVAIL_QTY_EPS}
+ORDER BY [Дата], [Магазин], [Артикул];
 """.strip()
 
 _SQL_PENETRATION = f"""
--- пенетрация_неделя | {T_SALES} + {T_NOMEN}
+-- M08/M09: чеки из СнятыеКассы; доля СП/Паскуччи по Товары смены (_Document119_VT2284)
+-- Прямой COUNT DISTINCT чеков с Паскуччи НЕВОЗМОЖЕН: VT2284 = агрегат SKU за смену, без ID чека.
+-- Оценка: checks_total * (sum_amt_pas / sum_amt_all) по _Fld2295 (= кассовая выручка смены).
+WITH {_SP_NOMEN_CTE},
+pas_nomen AS (
+  SELECT _IDRRef FROM [dbo].[{T_NOMEN}]
+  WHERE _Description LIKE N'%Паскучч%' OR _Description LIKE N'%Pascucc%'
+),
+shift_docs AS (
+  SELECT
+    d._IDRRef AS doc_ref,
+    {_CHECK_DATE} AS sale_date,
+    {_STORE_FROM_CHECK} AS store_name,
+    SUM(CAST(vt._Fld2319 AS float)) AS checks_total
+  FROM [dbo].[{T_SHIFT}] AS d
+  INNER JOIN [dbo].[{T_SHIFT_CASH}] AS vt ON vt._Document119_IDRRef = d._IDRRef
+  INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = d._Fld2267RRef
+  WHERE d._Posted = 0x01
+    AND d._Date_Time >= DATEADD(year, {YEAR_OFFSET}, CAST(:date_from AS datetime))
+    AND d._Date_Time <  DATEADD(year, {YEAR_OFFSET}, CAST(:date_to AS datetime))
+    {_STORE_FILTER}
+  GROUP BY d._IDRRef, {_CHECK_DATE}, {_STORE_FROM_CHECK}
+),
+goods AS (
+  SELECT
+    g._Document119_IDRRef AS doc_ref,
+    SUM(CAST(g._Fld2295 AS float)) AS rev_total,
+    SUM(CASE WHEN sp._IDRRef IS NOT NULL THEN CAST(g._Fld2295 AS float) ELSE 0 END) AS rev_sp,
+    SUM(CASE WHEN pas._IDRRef IS NOT NULL THEN CAST(g._Fld2295 AS float) ELSE 0 END) AS rev_pas
+  FROM [dbo].[{T_SHIFT_GOODS}] AS g
+  INNER JOIN shift_docs AS sd ON sd.doc_ref = g._Document119_IDRRef
+  LEFT JOIN sp_nomen AS sp ON sp._IDRRef = g._Fld2286RRef
+  LEFT JOIN pas_nomen AS pas ON pas._IDRRef = g._Fld2286RRef
+  GROUP BY g._Document119_IDRRef
+)
 SELECT
-    {_ISO_WEEK.format(d=_SALE_DATE)} AS [Неделя],
-    LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
-    COUNT(DISTINCT t._RecorderRRef) AS [Чеков всего],
-    COUNT(DISTINCT CASE
-        WHEN LOWER(CAST(n._Description AS nvarchar(255))) LIKE N'%производ%'
-          OR LOWER(CAST(n._Description AS nvarchar(255))) LIKE N'%сп %'
-        THEN t._RecorderRRef END) AS [Чеков с СП],
-    COUNT(DISTINCT CASE
-        WHEN LOWER(CAST(n._Description AS nvarchar(255))) LIKE N'%pasqucci%'
-          OR LOWER(CAST(n._Description AS nvarchar(255))) LIKE N'%паскуччи%'
-        THEN t._RecorderRRef END) AS [Чеков с Паскуччи]
-FROM [dbo].[{T_SALES}] AS t
-INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = t._Fld6692RRef
-LEFT JOIN [dbo].[{T_NOMEN}] AS n ON n._IDRRef = t._Fld6693RRef
-WHERE t._Active = 0x01
-  AND t._Period >= DATEADD(year, {YEAR_OFFSET}, CAST(:week_from AS datetime))
-  AND t._Period <  DATEADD(year, {YEAR_OFFSET}, CAST(:week_to AS datetime))
-  AND s._Marked = 0x00
-GROUP BY {_ISO_WEEK.format(d=_SALE_DATE)}, LTRIM(RTRIM(CAST(s._Description AS nvarchar(255))))
-ORDER BY [Неделя], [Магазин];
+    c.sale_date AS [Дата],
+    {_ISO_WEEK.format(d='c.sale_date')} AS [Неделя],
+    c.store_name AS [Магазин],
+    CAST(SUM(c.checks_total) AS float) AS [Чеков всего],
+    CAST(ROUND(SUM(c.checks_total * CASE WHEN g.rev_total > 0 THEN g.rev_sp / g.rev_total ELSE 0 END), 0) AS float)
+      AS [Чеков с СП],
+    CAST(ROUND(SUM(c.checks_total * CASE WHEN g.rev_total > 0 THEN g.rev_pas / g.rev_total ELSE 0 END), 0) AS float)
+      AS [Чеков с Паскуччи]
+FROM shift_docs AS c
+LEFT JOIN goods AS g ON g.doc_ref = c.doc_ref
+GROUP BY c.sale_date, c.store_name
+ORDER BY [Дата], [Магазин];
 """.strip()
 
+
+# Магазин списания: _Fld4658RRef→_Reference64 (VERIFIED; _Fld4656RRef не магазин)
 _SQL_WRITEOFF = f"""
--- списания_неделя | Документ.СписаниеТоваров → {T_WRITEOFF} / {T_WRITEOFF_VT}
+-- списания по статьям _Reference82 (_Fld4669RRef), по дням
 SELECT
-    {_ISO_WEEK.format(d=_DOC_DATE)} AS [Неделя],
-    LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
-    CAST(0 AS float) AS [ФРОФ],
-    CAST(0 AS float) AS [Пасскучи],
-    CAST(0 AS float) AS [Производство],
-    CAST(0 AS float) AS [Потеря потребительских свойств],
-    SUM(CAST(vt._Fld4685 AS float)) AS [Итого]
+    {_DOC_DATE} AS [Дата],
+    {_STORE_FROM_CHECK} AS [Магазин],
+    LTRIM(RTRIM(CAST(a._Description AS nvarchar(255)))) AS [Статья списания],
+    SUM(CAST(vt._Fld4685 AS float)) AS [Сумма]
 FROM [dbo].[{T_WRITEOFF}] AS d
 INNER JOIN [dbo].[{T_WRITEOFF_VT}] AS vt ON vt._Document172_IDRRef = d._IDRRef
-LEFT JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = d._Fld4656RRef
+INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = d._Fld4658RRef
+LEFT JOIN [dbo].[{T_EXPENSE_ITEMS}] AS a ON a._IDRRef = d._Fld4669RRef
 WHERE d._Posted = 0x01
-  AND d._Date_Time >= DATEADD(year, {YEAR_OFFSET}, CAST(:week_from AS datetime))
-  AND d._Date_Time <  DATEADD(year, {YEAR_OFFSET}, CAST(:week_to AS datetime))
-GROUP BY {_ISO_WEEK.format(d=_DOC_DATE)}, LTRIM(RTRIM(CAST(s._Description AS nvarchar(255))))
-ORDER BY [Неделя], [Магазин];
+  AND d._Marked = 0x00
+  AND d._Date_Time >= DATEADD(year, {YEAR_OFFSET}, CAST(:date_from AS datetime))
+  AND d._Date_Time <  DATEADD(year, {YEAR_OFFSET}, CAST(:date_to AS datetime))
+  {_STORE_FILTER}
+GROUP BY {_DOC_DATE}, {_STORE_FROM_CHECK},
+         LTRIM(RTRIM(CAST(a._Description AS nvarchar(255))))
+ORDER BY [Дата], [Магазин], [Сумма] DESC;
 """.strip()
 
+# Инвентаризация: магазин _Fld2513RRef; недостача = ABS(_Fld2523) один раз на документ
 _SQL_LOSSES = f"""
--- потери_месяц | списания {T_WRITEOFF} + инвентаризация {T_INV}
+-- Без задвоения: списания = SUM(VT) на документ (статья в шапке); недостачи = hdr без JOIN VT
 SELECT
-    FORMAT(base.[Период], 'yyyy-MM') AS [Месяц],
+    base.[Период] AS [Дата],
     base.[Магазин] AS [Магазин],
     base.[ВидПотерь] AS [Вид потерь],
     SUM(base.[Сумма]) AS [Сумма]
 FROM (
     SELECT {_DOC_DATE} AS [Период],
-           LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
-           N'Списания' AS [ВидПотерь],
-           CAST(vt._Fld4685 AS float) AS [Сумма]
+           {_STORE_FROM_CHECK} AS [Магазин],
+           LTRIM(RTRIM(CAST(a._Description AS nvarchar(255)))) AS [ВидПотерь],
+           (
+             SELECT SUM(CAST(vt._Fld4685 AS float))
+             FROM [dbo].[{T_WRITEOFF_VT}] AS vt
+             WHERE vt._Document172_IDRRef = d._IDRRef
+           ) AS [Сумма]
     FROM [dbo].[{T_WRITEOFF}] AS d
-    INNER JOIN [dbo].[{T_WRITEOFF_VT}] AS vt ON vt._Document172_IDRRef = d._IDRRef
-    LEFT JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = d._Fld4656RRef
+    INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = d._Fld4658RRef
+    LEFT JOIN [dbo].[{T_EXPENSE_ITEMS}] AS a ON a._IDRRef = d._Fld4669RRef
     WHERE d._Posted = 0x01
+      AND d._Marked = 0x00
+      AND d._Date_Time >= DATEADD(year, {YEAR_OFFSET}, CAST(:date_from AS datetime))
+      AND d._Date_Time <  DATEADD(year, {YEAR_OFFSET}, CAST(:date_to AS datetime))
+      {_STORE_FILTER}
 
     UNION ALL
 
     SELECT CAST(DATEADD(year, -{YEAR_OFFSET}, d._Date_Time) AS date) AS [Период],
            LTRIM(RTRIM(CAST(s2._Description AS nvarchar(255)))) AS [Магазин],
            N'Инвентаризация' AS [ВидПотерь],
-           ABS(CAST(vt2._Fld2540 AS float)) AS [Сумма]
+           CASE WHEN CAST(d._Fld2523 AS float) < 0
+                THEN ABS(CAST(d._Fld2523 AS float)) ELSE 0 END AS [Сумма]
     FROM [dbo].[{T_INV}] AS d
-    INNER JOIN [dbo].[{T_INV_VT}] AS vt2 ON vt2._Document124_IDRRef = d._IDRRef
-    LEFT JOIN [dbo].[{T_STORE}] AS s2 ON s2._IDRRef = d._Fld2511RRef
+    INNER JOIN [dbo].[{T_STORE}] AS s2 ON s2._IDRRef = d._Fld2513RRef
     WHERE d._Posted = 0x01
+      AND d._Marked = 0x00
+      AND d._Date_Time >= DATEADD(year, {YEAR_OFFSET}, CAST(:date_from AS datetime))
+      AND d._Date_Time <  DATEADD(year, {YEAR_OFFSET}, CAST(:date_to AS datetime))
+      AND s2._Marked = 0x00
+      AND LTRIM(RTRIM(CAST(s2._Description AS nvarchar(255)))) NOT IN ({_NON})
+      AND LTRIM(RTRIM(CAST(s2._Description AS nvarchar(255)))) NOT LIKE N'РЦ%'
 ) AS base
-WHERE base.[Период] >= CAST(:month_from AS date)
-  AND base.[Период] <  CAST(:month_to AS date)
-GROUP BY FORMAT(base.[Период], 'yyyy-MM'), base.[Магазин], base.[ВидПотерь]
-ORDER BY [Месяц], [Магазин], [Вид потерь];
+WHERE base.[Магазин] IS NOT NULL
+  AND base.[Сумма] IS NOT NULL
+  AND base.[Сумма] <> 0
+GROUP BY base.[Период], base.[Магазин], base.[ВидПотерь]
+ORDER BY [Дата], [Магазин], [Вид потерь];
 """.strip()
 
 _SQL_EXPENSES = f"""
--- расходы_месяц | БюджетНакладных → {T_BUDGET_OPEX} / {T_BUDGET_OPEX_VT}
 SELECT
     FORMAT(CAST(DATEADD(year, -{YEAR_OFFSET}, d._Date_Time) AS date), 'yyyy-MM') AS [Месяц],
     LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
@@ -277,7 +536,6 @@ ORDER BY [Месяц], [Магазин];
 """.strip()
 
 _SQL_PROFIT = f"""
--- прибыль_месяц | ВыручкаИСебестоимостьПродаж → {T_PROFIT} (= {T_SALES})
 SELECT
     FORMAT({_SALE_DATE}, 'yyyy-MM') AS [Месяц],
     LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
@@ -295,20 +553,18 @@ ORDER BY [Месяц], [Магазин];
 """.strip()
 
 _SQL_SP = f"""
--- сп_месяц | фильтр по номенклатуре на {T_SALES}+{T_NOMEN}
+WITH {_SP_NOMEN_CTE}
 SELECT
     FORMAT({_SALE_DATE}, 'yyyy-MM') AS [Месяц],
     LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
-    SUM(CAST(t._Fld6704 AS float)) AS [Выручка СП],
-    SUM(CAST(t._Fld6704 AS float) - CAST(t._Fld6708 AS float)) AS [Валовая прибыль СП]
+    SUM(CASE WHEN sp._IDRRef IS NOT NULL THEN CAST(t._Fld6704 AS float) ELSE 0 END) AS [Выручка СП],
+    SUM(CAST(t._Fld6704 AS float)) AS [Выручка всего],
+    SUM(CASE WHEN sp._IDRRef IS NOT NULL THEN CAST(t._Fld6704 AS float) - CAST(t._Fld6708 AS float) ELSE 0 END)
+      AS [Валовая прибыль СП]
 FROM [dbo].[{T_SALES}] AS t
 INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = t._Fld6692RRef
-INNER JOIN [dbo].[{T_NOMEN}] AS n ON n._IDRRef = t._Fld6693RRef
+LEFT JOIN sp_nomen AS sp ON sp._IDRRef = t._Fld6693RRef
 WHERE t._Active = 0x01
-  AND (
-        LOWER(CAST(n._Description AS nvarchar(255))) LIKE N'%производ%'
-     OR LOWER(CAST(n._Description AS nvarchar(255))) LIKE N'%паскуччи%'
-      )
   AND t._Period >= DATEADD(year, {YEAR_OFFSET}, CAST(:month_from AS datetime))
   AND t._Period <  DATEADD(year, {YEAR_OFFSET}, CAST(:month_to AS datetime))
   AND s._Marked = 0x00
@@ -317,20 +573,29 @@ ORDER BY [Месяц], [Магазин];
 """.strip()
 
 _SQL_STOCK = f"""
--- остатки_месяц | ТоварыНаСкладах → {T_STOCK}
+-- Снимок из итогов _AccumRgT6616 (не net-flow за 120 дней по _AccumRg6601)
 SELECT
-    FORMAT(CAST(DATEADD(year, -{YEAR_OFFSET}, t._Period) AS date), 'yyyy-MM') AS [Месяц],
-    LTRIM(RTRIM(CAST(s._Description AS nvarchar(255)))) AS [Магазин],
+    FORMAT(DATEADD(day, -1, CAST(:month_to AS date)), 'yyyy-MM') AS [Месяц],
+    {_WH_TO_STORE} AS [Магазин],
     SUM(CAST(t._Fld6608 AS float)) AS [Остатки на конец месяца факт],
     CAST(0 AS float) AS [Остатки на конец месяца план]
-FROM [dbo].[{T_STOCK}] AS t
-LEFT JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = t._Fld6604RRef
-WHERE t._Active = 0x01
-  AND t._Period >= DATEADD(year, {YEAR_OFFSET}, CAST(:month_from AS datetime))
-  AND t._Period <  DATEADD(year, {YEAR_OFFSET}, CAST(:month_to AS datetime))
-GROUP BY FORMAT(CAST(DATEADD(year, -{YEAR_OFFSET}, t._Period) AS date), 'yyyy-MM'),
-         LTRIM(RTRIM(CAST(s._Description AS nvarchar(255))))
-ORDER BY [Месяц], [Магазин];
+FROM [dbo].[{T_STOCK_TOTALS}] AS t
+INNER JOIN [dbo].[{T_WAREHOUSE}] AS w ON w._IDRRef = t._Fld6603RRef
+INNER JOIN [dbo].[{T_STORE}] AS s ON s._IDRRef = w._Fld1140RRef
+WHERE t._Period = DATEADD(
+        year,
+        {YEAR_OFFSET},
+        CAST(DATEFROMPARTS(
+          YEAR(CAST(:month_to AS date)),
+          MONTH(CAST(:month_to AS date)),
+          1
+        ) AS datetime)
+      )
+  AND {_WH_TO_STORE} NOT IN ({_NON})
+  AND {_WH_TO_STORE} NOT LIKE N'РЦ%'
+  AND s._Marked = 0x00
+GROUP BY {_WH_TO_STORE}
+ORDER BY [Магазин];
 """.strip()
 
 
@@ -362,7 +627,7 @@ CATALOG_QUERIES: dict[str, SqlExtractQuery] = {
         "Выручка/чеки за день",
         _SQL_SALES_DAY,
         ("date_from", "date_to"),
-        (T_SALES, T_STORE, T_BUDGET_SALES, T_BUDGET_SALES_VT),
+        (T_SHIFT, T_SHIFT_CASH, T_STORE),
     ),
     "продажи_неделя": _q(
         "продажи_неделя",
@@ -371,7 +636,7 @@ CATALOG_QUERIES: dict[str, SqlExtractQuery] = {
         "Выручка/чеки за неделю",
         _SQL_SALES_WEEK,
         ("week_from", "week_to"),
-        (T_SALES, T_STORE),
+        (T_SHIFT, T_SHIFT_CASH, T_STORE),
     ),
     "продажи_месяц": _q(
         "продажи_месяц",
@@ -380,16 +645,34 @@ CATALOG_QUERIES: dict[str, SqlExtractQuery] = {
         "Выручка/чеки за месяц",
         _SQL_SALES_MONTH,
         ("month_from", "month_to"),
-        (T_SALES, T_STORE),
+        (T_SHIFT, T_SHIFT_CASH, T_STORE),
     ),
     "доступность_неделя": _q(
         "доступность_неделя",
         "availability_week",
         "SQL_Доступность_Пенетрация",
-        "Доступность топ ТЗ/СП",
+        "Доступность: ТЗ от остатка, СП от продаж",
         _SQL_AVAILABILITY,
         ("week_from", "week_to"),
-        (T_STOCK, T_STORE),
+        (T_STOCK, T_WAREHOUSE, T_PROPS, T_PROP_KINDS, T_SALES, T_STORE),
+    ),
+    "доступность_sku": _q(
+        "доступность_sku",
+        "availability_sku",
+        "SQL_Доступность_Пенетрация",
+        "SKU: ТЗ по остатку, СП по продажам периода",
+        _SQL_AVAILABILITY_SKU,
+        ("week_from", "week_to"),
+        (T_STOCK, T_WAREHOUSE, T_PROPS, T_PROP_KINDS, T_NOMEN, T_STORE, T_SALES),
+    ),
+    "доступность_сп_день": _q(
+        "доступность_сп_день",
+        "availability_sp_day",
+        "SQL_Доступность_Пенетрация",
+        "Ежедневные продажи SKU корзины СП",
+        _SQL_AVAILABILITY_SP_DAY,
+        ("date_from", "date_to"),
+        (T_SALES, T_STORE, T_PROPS, T_PROP_KINDS, T_NOMEN),
     ),
     "пенетрация_неделя": _q(
         "пенетрация_неделя",
@@ -397,26 +680,26 @@ CATALOG_QUERIES: dict[str, SqlExtractQuery] = {
         "SQL_Доступность_Пенетрация",
         "Пенетрация СП и Паскуччи",
         _SQL_PENETRATION,
-        ("week_from", "week_to"),
-        (T_SALES, T_STORE, T_NOMEN),
+        ("date_from", "date_to"),
+        (T_SHIFT, T_SHIFT_CASH, T_SHIFT_GOODS, T_STORE, T_NOMEN),
     ),
     "списания_неделя": _q(
         "списания_неделя",
         "writeoff_week",
         "SQL_Списания_Потери",
-        "Списания по причинам",
+        "Списания по статьям",
         _SQL_WRITEOFF,
-        ("week_from", "week_to"),
-        (T_WRITEOFF, T_WRITEOFF_VT, T_STORE),
+        ("date_from", "date_to"),
+        (T_WRITEOFF, T_WRITEOFF_VT, T_STORE, T_EXPENSE_ITEMS),
     ),
     "потери_месяц": _q(
         "потери_месяц",
         "losses_month",
         "SQL_Списания_Потери",
-        "Потери: списания + инвентаризация",
+        "Потери: статьи списания + инвентаризация",
         _SQL_LOSSES,
-        ("month_from", "month_to"),
-        (T_WRITEOFF, T_WRITEOFF_VT, T_INV, T_INV_VT, T_STORE),
+        ("date_from", "date_to"),
+        (T_WRITEOFF, T_WRITEOFF_VT, T_INV, T_STORE, T_EXPENSE_ITEMS),
     ),
     "расходы_месяц": _q(
         "расходы_месяц",
@@ -452,7 +735,7 @@ CATALOG_QUERIES: dict[str, SqlExtractQuery] = {
         "Остатки конец месяца",
         _SQL_STOCK,
         ("month_from", "month_to"),
-        (T_STOCK, T_STORE),
+        (T_STOCK_TOTALS, T_WAREHOUSE, T_STORE),
     ),
 }
 
@@ -485,4 +768,9 @@ def get_query(
 assert physical_table("РегистрНакопления.Продажи") == T_SALES
 assert "_AccumRg" in T_SALES or T_SALES.startswith("_Accum")
 assert "РегистрНакопления_Продажи" not in _SQL_SALES_DAY
-assert T_SALES in _SQL_SALES_DAY
+assert T_SHIFT in _SQL_SALES_DAY
+assert T_SHIFT_CASH in _SQL_SALES_DAY
+assert "_Fld2319" in _SQL_SALES_DAY
+assert "_Fld6977" in _SQL_SALES_DAY
+assert "_Document156" not in _SQL_SALES_DAY
+assert "_Fld4669RRef" in _SQL_LOSSES

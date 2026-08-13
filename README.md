@@ -61,11 +61,11 @@ WARROOM_GATEWAY_TOKEN = "***"   # тот же, что в ~/.config/warroom/gatew
 `http://192.168.2.95:8080/`
 
 - Прямой Streamlit War Room, **без Metabase**, без пароля, без токенов в URL.
-- Доступ только с `192.168.2.0/24` и `10.100.0.0/24` (nginx allow/deny).
+- Доступ с `192.168.2.0/24`, `10.100.0.0/23` и `10.15.0.0/24` (nginx allow/deny).
 - Не открывать `http://81.163.35.181:3000/` (это Metabase → форма логина).
 
-**Резервная публичная** (если вне офисной сети):
-`http://81.163.35.181:3000/warroom/`
+**Смартфон** (пока порт 3000 с интернета — это Metabase на другой машине):
+`https://30b10eeeacdb8b.lhr.life/`
 
 Streamlit Cloud (необязательный TODO): https://zya-war-room-v2-ay66kuefknxypjxopuwpaj.streamlit.app/  
 сейчас с Sharing=Private (логин). Чтобы вернуть Cloud без логина — App settings → Sharing → Public.

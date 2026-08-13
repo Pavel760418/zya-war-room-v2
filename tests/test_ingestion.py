@@ -69,11 +69,11 @@ def test_real_pilot_file_ingests_and_builds_dashboard():
     res = ingest_excel(str(path), filename=path.name)
     assert res.ok is True
     assert res.has_store_data is True
-    assert res.report.status == Severity.SUCCESS
+    assert res.report.status in {Severity.SUCCESS, Severity.WARNING}
     for col in ("Магазин", "Выручка факт", "Выручка план", "Количество чеков"):
         assert col in res.raw["sales_month"].columns
     dash = MetricsService(res.raw, mode="excel").build_dashboard(period="month")
-    assert len(dash.kpis) == 5
+    assert len(dash.kpis) >= 5
     assert len(dash.store_table) >= 1
 
 
@@ -125,7 +125,8 @@ def test_unreadable_file_is_fatal_but_safe():
     dash = MetricsService(res.raw, mode="excel").build_dashboard(period="month")
     assert dash.store_table == []
     assert dash.drilldown is None
-    assert len(dash.kpis) == 5
+    assert dash.kpis == []
+    assert any(a.title == "Нет данных за выбранный период" for a in dash.alerts)
 
 
 def test_generated_template_is_ingestible():

@@ -53,7 +53,7 @@ def run(label: str) -> dict:
     os.environ["WARROOM_GATEWAY_TOKEN"] = vals["WARROOM_GATEWAY_TOKEN"]
     os.environ["WARROOM_GATEWAY_URL"] = "http://127.0.0.1:3000/warroom-api"
 
-    edge_ui = urllib.request.urlopen("http://127.0.0.1:3000/warroom/_stcore/health", timeout=20).read().decode().strip()
+    edge_ui = urllib.request.urlopen("http://127.0.0.1:3000/_stcore/health", timeout=20).read().decode().strip()
     gw = _http_json("http://127.0.0.1:3000/warroom-api/health")
     port_open = _external_port_open("81.163.35.181", 3000)
 

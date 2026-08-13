@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Operational Cockpit v2</title>
+  <title>МегаМетрики</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -29,15 +29,14 @@
 <div class="page">
   <section class="grid top">
     <div class="panel hero">
-      <div class="pill">WAR ROOM V2</div>
-      <h1>Operational Cockpit — drill-down + action layer</h1>
-      <p>Версия для оценки визуального считывания в боевом режиме: сеть магазинов, сигналы риска, детализация магазина и слой управленческих действий по проблемным KPI.</p>
+      <div class="pill">МегаМетрики</div>
+      <h1>Панель управления сетью</h1>
+      <p>Сеть магазинов, сигналы риска и детализация по магазину. Источник данных — прямой SQL к 1С (MSSQL). Физические таблицы берутся из каталога хранения метаданных.</p>
       <div class="hero-meta" id="heroMeta"></div>
     </div>
     <div class="panel side">
-      <div style="display:flex;justify-content:space-between;align-items:center"><strong>Режимы</strong><button class="btn" data-theme-toggle>◐</button></div>
-      <div class="subtle">Excel pilot нужен для привязки к реальным данным, а demo mode нужен для стресс-теста визуального восприятия при 20+ магазинах и контрастных сценариях.</div>
-      <div class="subtle">Сейчас отдельными блоками реализованы: 1) drill-down карточка магазина, 2) action layer с комментариями и действиями.</div>
+      <div style="display:flex;justify-content:space-between;align-items:center"><strong>Режимы</strong></div>
+      <div class="subtle">Источник данных — прямой SQL к 1С (MSSQL). Физические таблицы берутся из каталога хранения метаданных.</div>
     </div>
   </section>
 
@@ -51,10 +50,7 @@
       <button class="btn active" data-scope="network">Сеть</button>
       <button class="btn" data-scope="store">Магазин</button>
     </div>
-    <select class="select" id="modeSelect"><option value="excel">Excel pilot</option><option value="demo">Demo random</option></select>
     <select class="select" id="storeSelect"></select>
-    <select class="select" id="regionSelect"><option>Все регионы</option><option>Дагестан</option></select>
-    <select class="select" id="clusterSelect"><option>Все кластеры</option></select>
     <button class="btn" id="refreshBtn">Обновить</button>
   </section>
 
@@ -73,7 +69,7 @@
       </article>
       <article class="card">
         <div class="section-title">Таблица магазинов</div>
-        <div class="table-wrap"><table><thead><tr><th>Магазин</th><th>Выручка</th><th>% плана</th><th>YoY</th><th>СП %</th><th>ТЗ %</th><th>СП avail %</th><th>Потери</th><th>Недостача</th><th>Риск</th></tr></thead><tbody id="storeTable"></tbody></table></div>
+        <div class="table-wrap"><table><thead><tr><th>Магазин</th><th>Выручка</th><th>% плана</th><th>г/г</th><th>Доля СП</th><th>Доступность ТЗ</th><th>Доступность СП</th><th>Потери</th><th>Недостачи</th><th>Риск</th></tr></thead><tbody id="storeTable"></tbody></table></div>
       </article>
     </div>
     <div class="grid">
@@ -115,7 +111,7 @@ async function loadDashboard(){
 
 function renderHero(data){
   const hero = document.getElementById('heroMeta');
-  const items = [['Период', data.period.toUpperCase()], ['Контур', data.scope==='network'?'Вся сеть':(data.selection.store||'Магазин')], ['Режим', data.mode], ['Обновление', data.last_update], ['Сеть', data.meta.network]];
+  const items = [['Период', data.period.toUpperCase()], ['Магазин', data.scope==='network'?'Вся сеть':(data.selection.store||'Магазин')], ['Режим', data.mode], ['Обновление', data.last_update], ['Сеть', data.meta.network]];
   hero.innerHTML = items.map(([k,v])=>`<div class='meta-box'><div class='k'>${k}</div><div class='v'>${v}</div></div>`).join('');
 }
 function renderKpis(items){
@@ -125,7 +121,7 @@ function renderActions(items){
   document.getElementById('actionsList').innerHTML = items.map(a=>`<div class='action'><div><strong>${a.priority} · ${a.title}</strong><div class='subtle'>${a.owner} · ${a.eta}</div><div class='subtle'>${a.rationale}</div></div><span class='badge ${a.status_color} ${a.status_color}'>${a.priority}</span></div>`).join('') || `<div class='action'><div><strong>P3 · Поддерживать текущий операционный режим</strong><div class='subtle'>Нет критичных действий</div></div><span class='badge green'>P3</span></div>`;
 }
 function renderAlerts(items){
-  document.getElementById('alertsList').innerHTML = items.map(a=>`<div class='alert'><div><strong>${a.title}</strong><div class='subtle'>${a.store||'Сеть'} · ${a.comment||''}</div></div><span class='badge ${a.severity} ${a.severity}'>${fmt.pct(a.value)}</span></div>`).join('') || `<div class='alert'><div><strong>Критичных сигналов нет</strong><div class='subtle'>Контур работает в целевом диапазоне</div></div><span class='badge green'>OK</span></div>`;
+  document.getElementById('alertsList').innerHTML = items.map(a=>`<div class='alert'><div><strong>${a.title}</strong><div class='subtle'>${a.store||'Сеть'} · ${a.comment||''}</div></div><span class='badge ${a.severity} ${a.severity}'>${fmt.pct(a.value)}</span></div>`).join('') || `<div class='alert'><div><strong>Критичных сигналов нет</strong><div class='subtle'>Показатели в целевом диапазоне</div></div><span class='badge green'>OK</span></div>`;
 }
 function renderTable(rows){
   document.getElementById('storeTable').innerHTML = rows.map(r=>`<tr><td>${r.store}</td><td>${fmt.money(r.revenue)}</td><td class='${statusClass(r.status_color)}'>${fmt.pct(r.plan_pct||0)}%</td><td>${fmt.pct(r.yoy||0)}%</td><td>${fmt.pct(r.own_production_share_pct||0)}%</td><td>${fmt.pct(r.shop_availability||0)}%</td><td>${fmt.pct(r.production_availability||0)}%</td><td>${fmt.money(r.losses||0)}</td><td>${fmt.money(r.inventory_shortage||0)}</td><td><span class='badge ${r.status_color} ${r.status_color}'>${r.risk_level}</span></td></tr>`).join('');

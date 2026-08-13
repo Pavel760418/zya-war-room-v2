@@ -86,7 +86,7 @@ def empty_raw() -> dict:
     return raw
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner="Загружаем демо-данные...")
 def load_demo_raw(seed: int = 42, stores_count: int = 24) -> dict:
     return DemoRepository(seed=seed, stores_count=stores_count).load()
 
@@ -106,9 +106,12 @@ def sql_connection_status() -> Any:
         return SqlStatus(ok=False, message="SQL слой недоступен", error=str(exc)[:300])
 
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner="Загружаем данные из локального снимка...", ttl=60)
 def load_sql_result(_refresh_token: int = 0) -> Any:
-    """Загрузить raw из SQL. Без Excel-fallback."""
+    """Загрузить raw из локального кэша (или live SQL только если явно включено).
+
+    TTL 60с: десятки параллельных сессий не пересчитывают тяжёлую загрузку заново.
+    """
     if not _SQL_AVAILABLE or SqlDataService is None:
         status = sql_connection_status()
         return SqlLoadResult(
@@ -119,7 +122,19 @@ def load_sql_result(_refresh_token: int = 0) -> Any:
             last_success_at=None,
         )
     try:
-        return SqlDataService().load()
+        svc = SqlDataService()
+        result = svc.load()
+        src = (result.raw or {}).get("_data_source") or (
+            "live_sql" if svc.uses_live_sql else "local_cache"
+        )
+        # Явный след для аудита: что читает пользовательский UI.
+        print(
+            f"[warroom.data] source={src} live_sql={svc.uses_live_sql} "
+            f"server={getattr(result.status, 'server', None)} "
+            f"synced_at={result.last_success_at}",
+            flush=True,
+        )
+        return result
     except Exception as exc:  # noqa: BLE001
         return SqlLoadResult(
             raw=empty_raw(),
@@ -138,11 +153,10 @@ def render_sql_connection_error(status: Any) -> None:
     st.markdown(
         """
         <div class="hero-card" style="padding:2rem 1.5rem;margin-bottom:1rem;">
-          <div class="pill">SQL ONLY</div>
+          <div class="pill">МегаМетрики</div>
           <h2 style="margin:0.6rem 0 0.4rem;">Нет подключения к базе 1С (MSSQL)</h2>
           <p class="subtle" style="max-width:52rem;">
-            Приложение работает только через SQL. Excel-загрузка в пользовательском
-            интерфейсе отключена. Задайте Secrets и убедитесь, что хост доступен
+            Приложение работает только через SQL. Задайте Secrets и убедитесь, что хост доступен
             с машины, где крутится Streamlit.
           </p>
         </div>

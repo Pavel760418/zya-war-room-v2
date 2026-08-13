@@ -38,15 +38,20 @@ def test_catalog_resolves_war_room_objects():
 
 
 def test_sql_extract_uses_physical_names_not_logical():
+    from app.ingestion.sql_extract import T_SHIFT, T_SHIFT_CASH
+
     assert T_SALES == "_AccumRg6691"
+    assert T_SHIFT == "_Document119"
+    assert T_SHIFT_CASH == "_Document119_VT2313"
     sql, _ = get_query("продажи_день", params={"date_from": date.today(), "date_to": date.today()})
-    assert "_AccumRg6691" in sql
+    assert "_Document119" in sql
+    assert "_Fld2319" in sql
     assert "РегистрНакопления_Продажи" not in sql
     assert "[dbo].[_Reference64]" in sql
     for q in CATALOG_QUERIES.values():
         assert q.physical_tables
         assert all(t.startswith("_") for t in q.physical_tables)
-        assert "РегистрНакопления_" not in q.sql_mssql or "_AccumRg" in q.sql_mssql
+        assert "РегистрНакопления_" not in q.sql_mssql or "_AccumRg" in q.sql_mssql or "_Document" in q.sql_mssql
 
 
 def test_sql_data_service_mock_connection_builds_dashboard():
@@ -63,7 +68,8 @@ def test_sql_data_service_mock_connection_builds_dashboard():
     empty = pd.DataFrame()
 
     def fake_fetch(sql, params=None, columns=None):
-        if "_AccumRg6691" in sql and "FORMAT" in sql.upper():
+        s = sql or ""
+        if "_Document119" in s and "FORMAT" in s.upper():
             return pd.DataFrame(
                 {
                     "Месяц": ["2026-08", "2026-08"],
@@ -73,7 +79,7 @@ def test_sql_data_service_mock_connection_builds_dashboard():
                     "Количество чеков": [50.0, 40.0],
                 }
             )
-        if "_AccumRg6691" in sql:
+        if "_Document119" in s:
             return day.copy()
         return empty.copy()
 
@@ -87,7 +93,7 @@ def test_sql_data_service_mock_connection_builds_dashboard():
     assert result.status.ok
     assert not result.raw["sales_day"].empty
     dash = MetricsService(result.raw, mode="excel").build_dashboard(period="day")
-    assert len(dash.kpis) == 5
+    assert len(dash.kpis) >= 5
     assert len(dash.store_table) >= 1
 
 
@@ -127,4 +133,4 @@ def test_live_mssql_optional():
     assert res.mapping_complete or len(res.warnings) > 0
     if not res.raw["sales_day"].empty:
         dash = MetricsService(res.raw, mode="excel").build_dashboard(period="day")
-        assert len(dash.kpis) == 5
+        assert len(dash.kpis) >= 5

@@ -17,21 +17,100 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PATHS = (
     Path("/opt/war_rom/data/1c/СтруктураХраненияБазыДанных.xlsx"),
     ROOT / "var" / "data" / "1c" / "СтруктураХраненияБазыДанных.xlsx",
+    Path("/home/andr/zya-war-room-v2/zya-war-room-v2/data/СтруктураХраненияБазыДанных.xlsx"),
 )
-
 REQUIRED_COLS = ("Метаданные", "Имя таблицы хранения", "Имя таблицы", "Назначение")
+_LAST_RESOLVE_NOTES: str = ""
+
+
+def _norm(val: Any) -> str:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    text_v = str(val).replace("\r\n", "\n").replace("\r", "\n")
+    return " ".join(text_v.split()).strip()
+
+
+def _looks_like_probe(path: Path) -> bool:
+    """Heuristic: SQL INFORMATION_SCHEMA probe files are small and contain 'probe' in purpose."""
+    try:
+        if path.stat().st_size < 50000:
+            sample = pd.read_excel(path, engine="openpyxl", nrows=5)
+            sample.columns = [_norm(c) for c in sample.columns]
+            if "Назначение" in sample.columns:
+                joined = " ".join(_norm(v) for v in sample["Назначение"].tolist()).lower()
+                if "probe" in joined or "information_schema" in joined:
+                    return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
+def discover_structure_xlsx_candidates() -> list[Path]:
+    found: list[Path] = []
+    seen: set[str] = set()
+    roots_patterns = [
+        (Path("/opt/war_rom/data/1c"), "СтруктураХраненияБазыДанных*"),
+        (Path("/home/andr"), "**/СтруктураХраненияБазыДанных*"),
+    ]
+    for root, pat in roots_patterns:
+        if not root.exists():
+            continue
+        for p in root.glob(pat):
+            if not p.is_file():
+                continue
+            key = str(p.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            found.append(p.resolve())
+    for p in DEFAULT_PATHS:
+        if p.is_file():
+            key = str(p.resolve())
+            if key not in seen:
+                seen.add(key)
+                found.append(p.resolve())
+    return found
 
 
 def resolve_structure_xlsx(path: Optional[str] = None) -> Path:
+    """Resolve structure map XLSX without moving/renaming sources.
+
+    Selection: non-probe over probe, then newest mtime, then largest size.
+    Criterion stored in _LAST_RESOLVE_NOTES for import journal.
+    """
+    global _LAST_RESOLVE_NOTES
     if path:
-        return Path(path)
+        p = Path(path)
+        _LAST_RESOLVE_NOTES = f"explicit path: {p}"
+        return p
     env = (os.getenv("WARROM_1C_STRUCTURE_XLSX") or "").strip()
     if env:
-        return Path(env)
-    for p in DEFAULT_PATHS:
-        if p.is_file():
-            return p
-    return DEFAULT_PATHS[0]
+        p = Path(env)
+        _LAST_RESOLVE_NOTES = f"env WARROM_1C_STRUCTURE_XLSX: {p}"
+        return p
+
+    cands = discover_structure_xlsx_candidates()
+    if not cands:
+        _LAST_RESOLVE_NOTES = "no candidates; fallback DEFAULT_PATHS[0]"
+        return DEFAULT_PATHS[0]
+
+    scored: list[tuple[tuple, Path]] = []
+    for p in cands:
+        try:
+            probe = _looks_like_probe(p)
+            scored.append(((0 if probe else 1, p.stat().st_mtime, p.stat().st_size), p))
+        except OSError:
+            continue
+    if not scored:
+        _LAST_RESOLVE_NOTES = "candidates unreadable; fallback DEFAULT_PATHS[0]"
+        return DEFAULT_PATHS[0]
+    scored.sort(key=lambda x: x[0], reverse=True)
+    chosen = scored[0][1]
+    _LAST_RESOLVE_NOTES = (
+        f"chosen={chosen}; criterion=non_probe>mtime>size; "
+        f"candidates={[str(p) for _, p in scored]}"
+    )
+    return chosen
 
 
 def _sha256_file(path: Path) -> str:
@@ -40,13 +119,6 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def _norm(val: Any) -> str:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return ""
-    text_v = str(val).replace("\r\n", "\n").replace("\r", "\n")
-    return " ".join(text_v.split()).strip()
 
 
 def _row_hash(meta: str, storage: str, physical: str, purpose: str) -> str:
@@ -206,11 +278,11 @@ def import_structure_map(
                     (source_file_name, source_file_hash, imported_at, actor, total_rows,
                      inserted_rows, updated_rows, deactivated_rows, skipped_rows, import_status, error_summary)
                     VALUES
-                    (:fn, :fh, :at, :actor, :total, :ins, :upd, :deact, :skip, 'ok', NULL)
+                    (:fn, :fh, :at, :actor, :total, :ins, :upd, :deact, :skip, 'ok', :notes)
                     """
                 ),
                 {
-                    "fn": path.name,
+                    "fn": str(path),
                     "fh": file_hash,
                     "at": now,
                     "actor": actor,
@@ -219,11 +291,12 @@ def import_structure_map(
                     "upd": updated,
                     "deact": deactivated,
                     "skip": skipped,
+                    "notes": (_LAST_RESOLVE_NOTES or "")[:900] or None,
                 },
             )
         return {
             "import_status": "ok",
-            "source_file_name": path.name,
+            "source_file_name": str(path),
             "source_file_hash": file_hash,
             "total_rows": len(rows_out),
             "inserted_rows": inserted,
@@ -231,6 +304,7 @@ def import_structure_map(
             "deactivated_rows": deactivated,
             "skipped_rows": skipped,
             "imported_at": now,
+            "resolve_notes": _LAST_RESOLVE_NOTES,
         }
     except Exception as exc:  # noqa: BLE001
         with eng.begin() as conn:
@@ -281,6 +355,8 @@ def catalog_status(engine: Engine | None = None) -> dict[str, Any]:
         "total_rows": int(total or 0),
         "last_import": dict(last) if last else None,
         "expected_xlsx_paths": [str(p) for p in DEFAULT_PATHS],
+        "discovered_candidates": [str(p) for p in discover_structure_xlsx_candidates()],
+        "resolve_notes": _LAST_RESOLVE_NOTES,
     }
 
 

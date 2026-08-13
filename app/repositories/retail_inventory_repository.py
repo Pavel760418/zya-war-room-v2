@@ -17,9 +17,15 @@ ACCUM_SALES = "_AccumRg6691"
 ACCUM_STOCK = "_AccumRg6601"
 REF_STORE = "_Reference64"
 REF_WAREHOUSE = "_Reference76"
-DOC_WRITEOFF = "_Document124"
-VT_WRITEOFF = "_Document124_VT2532"
-DOC_TRANSFER = "_Document122"
+DOC_INVENTORY = "_Document124"
+VT_INVENTORY = "_Document124_VT2532"
+DOC_SUPPLIER_RETURN = "_Document112"
+VT_SUPPLIER_RETURN = "_Document112_VT1970"
+# DocumentChngR1990 — регистрация изменений Document112 (не тело)
+DOC_WRITEOFF = "_Document172"  # Документ.СписаниеТоваров (каталог 1С)
+VT_WRITEOFF = "_Document172_VT4675"
+DOC_TRANSFER = "_Document144"  # Документ.ПеремещениеТоваров (каталог 1С)
+VT_TRANSFER = "_Document144_VT3584"
 REF_NOMEN = "_Reference58"
 
 
@@ -38,7 +44,11 @@ def _validate(f: InventoryFilters) -> None:
 
 
 class RetailInventoryRepository:
-    COGS_WARNING = "Себестоимость из _AccumRg6691._Fld6708 — требуется финальная сверка с 1С."
+    COGS_WARNING = (
+        "COGS из _AccumRg6691._Fld6708. Зерно регистра ≠ чеки _Document156 "
+        "(контроль 2026-08-10: AccumRg выручка ~4.4× продаж чеков). "
+        "Маржу считать только внутри AccumRg (выручка Fld6704 − COGS Fld6708), не смешивать с net_revenue чеков."
+    )
     STOCK_WARNING = "Остатки из _AccumRg6601 — кандидат по складу; связь склад→магазин эвристическая."
 
     def __init__(self, db: Optional[SqlDatabase] = None):
@@ -107,8 +117,8 @@ class RetailInventoryRepository:
             df = df[df["store_name"].astype(str).str.contains(f.store_name, case=False, na=False)]
         return df
 
-    def load_writeoffs_daily(self, f: InventoryFilters) -> pd.DataFrame:
-        """Write-off candidate: _Document124 + lines VT2532."""
+    def load_inventories_daily(self, f: InventoryFilters) -> pd.DataFrame:
+        """Инвентаризация: _Document124 + VT2532 (подтверждено бизнесом)."""
         _validate(f)
         d0 = to_1c_datetime(f.date_from)
         d1 = to_1c_datetime(inclusive_date_to_exclusive(f.date_to))
@@ -129,10 +139,10 @@ class RetailInventoryRepository:
             f"""
             SELECT d._IDRRef AS doc_id, {sale_date} AS op_date,
                    LTRIM(RTRIM(CAST(d._Number AS nvarchar(50)))) AS doc_number,
-                   CAST(d._Fld2523 AS float) AS header_amount,
-                   CAST(d._Fld2526_RTRef AS binary(4)) AS op_type_ref
-            FROM dbo.{DOC_WRITEOFF} AS d
+                   CAST(d._Fld2523 AS float) AS header_amount
+            FROM dbo.{DOC_INVENTORY} AS d
             WHERE d._Posted = 0x01
+              AND d._Marked = 0x00
               AND d._Date_Time >= %s AND d._Date_Time < %s
               {store_clause}
             """,
@@ -164,7 +174,7 @@ class RetailInventoryRepository:
                     SELECT _Document124_IDRRef AS doc_id,
                            SUM(CAST(_Fld2535 AS float)) AS qty,
                            SUM(CAST(_Fld2540 AS float)) AS amount_rub
-                    FROM dbo.{VT_WRITEOFF}
+                    FROM dbo.{VT_INVENTORY}
                     WHERE _Document124_IDRRef IN ({ph})
                     GROUP BY _Document124_IDRRef
                     """,
@@ -176,41 +186,214 @@ class RetailInventoryRepository:
         merged["qty"] = pd.to_numeric(merged.get("qty"), errors="coerce").fillna(0)
         merged["amount_rub"] = pd.to_numeric(merged.get("amount_rub"), errors="coerce").fillna(0)
         merged["disposal_type"] = merged["header_amount"].apply(
-            lambda x: "списание (кандидат _Document124)"
+            lambda x: "инвентаризация: недостача"
             if float(x or 0) < 0
-            else "инвентаризационная корректировка (кандидат)"
+            else "инвентаризация: излишек"
             if float(x or 0) > 0
-            else "неидентифицированный тип выбытия"
+            else "инвентаризация: нулевая корректировка"
         )
-        out = (
+        return (
             merged.groupby(["op_date", "store_name", "disposal_type"], as_index=False)
             .agg(document_count=("doc_id", "count"), qty=("qty", "sum"), amount_rub=("amount_rub", "sum"))
             .sort_values(["op_date", "amount_rub"], ascending=[True, False])
         )
-        return out
 
-    def load_transfers_daily(self, f: InventoryFilters) -> pd.DataFrame:
-        """Transfer candidate: _Document122."""
+    def load_writeoffs_daily(self, f: InventoryFilters) -> pd.DataFrame:
+        """Списание товаров: _Document172 + VT4675 (каталог: Документ.СписаниеТоваров)."""
         _validate(f)
         d0 = to_1c_datetime(f.date_from)
         d1 = to_1c_datetime(inclusive_date_to_exclusive(f.date_to))
         from app.domain.retail_1c_dates import sql_date_from_doc
+        from app.domain.store_prefix_map import store_name_from_document_number
 
         sale_date = sql_date_from_doc("d")
-        sql = f"""
-        SELECT {sale_date} AS op_date,
-               COUNT(*) AS document_count,
-               SUM(CAST(d._Fld2443 AS float)) AS qty_candidate,
-               SUM(CAST(d._Fld2444 AS float)) AS amount_candidate
-        FROM dbo.{DOC_TRANSFER} AS d
-        WHERE d._Posted = 0x01
-          AND d._Date_Time >= %s AND d._Date_Time < %s
-        GROUP BY {sale_date}
-        """
-        df = self.db.fetch_df(sql, params=(d0, d1))
-        if not df.empty:
-            df["disposal_type"] = "перемещение (кандидат _Document122)"
-        return df
+        store_clause, store_params = "", []
+        if f.store_name:
+            prefixes = prefixes_for_store_name(f.store_name)
+            if prefixes:
+                parts, store_params = [], []
+                for p in prefixes:
+                    parts.append("LTRIM(RTRIM(CAST(d._Number AS nvarchar(50)))) LIKE %s")
+                    store_params.append(f"{p}%")
+                store_clause = f" AND ({' OR '.join(parts)})"
+
+        docs = self.db.fetch_df(
+            f"""
+            SELECT d._IDRRef AS doc_id, {sale_date} AS op_date,
+                   LTRIM(RTRIM(CAST(d._Number AS nvarchar(50)))) AS doc_number,
+                   CAST(d._Fld4665 AS float) AS header_amount
+            FROM dbo.{DOC_WRITEOFF} AS d
+            WHERE d._Posted = 0x01
+              AND d._Marked = 0x00
+              AND d._Date_Time >= %s AND d._Date_Time < %s
+              {store_clause}
+            """,
+            params=(d0, d1, *store_params),
+        )
+        if docs.empty:
+            return pd.DataFrame(
+                columns=["op_date", "store_name", "disposal_type", "document_count", "qty", "amount_rub"]
+            )
+        docs["store_name"] = docs["doc_number"].map(store_name_from_document_number)
+        ids = [bytes(x) for x in docs["doc_id"].tolist()]
+        line_frames: list[pd.DataFrame] = []
+        batch = 400
+        for i in range(0, len(ids), batch):
+            chunk = ids[i : i + batch]
+            ph = ",".join(["%s"] * len(chunk))
+            line_frames.append(
+                self.db.fetch_df(
+                    f"""
+                    SELECT _Document172_IDRRef AS doc_id,
+                           SUM(CAST(_Fld4680 AS float)) AS qty,
+                           SUM(CAST(_Fld4685 AS float)) AS amount_rub
+                    FROM dbo.{VT_WRITEOFF}
+                    WHERE _Document172_IDRRef IN ({ph})
+                    GROUP BY _Document172_IDRRef
+                    """,
+                    params=tuple(chunk),
+                )
+            )
+        lines = pd.concat(line_frames, ignore_index=True) if line_frames else pd.DataFrame()
+        merged = docs.merge(lines, on="doc_id", how="left")
+        merged["qty"] = pd.to_numeric(merged.get("qty"), errors="coerce").fillna(0)
+        merged["amount_rub"] = pd.to_numeric(merged.get("amount_rub"), errors="coerce").fillna(
+            pd.to_numeric(merged["header_amount"], errors="coerce")
+        )
+        merged["disposal_type"] = "списание товаров (_Document172)"
+        return (
+            merged.groupby(["op_date", "store_name", "disposal_type"], as_index=False)
+            .agg(document_count=("doc_id", "count"), qty=("qty", "sum"), amount_rub=("amount_rub", "sum"))
+            .sort_values(["op_date", "amount_rub"], ascending=[True, False])
+        )
+
+    def load_transfers_daily(self, f: InventoryFilters) -> pd.DataFrame:
+        """Перемещение товаров: _Document144 + VT3584 (каталог: Документ.ПеремещениеТоваров)."""
+        _validate(f)
+        d0 = to_1c_datetime(f.date_from)
+        d1 = to_1c_datetime(inclusive_date_to_exclusive(f.date_to))
+        from app.domain.retail_1c_dates import sql_date_from_doc
+        from app.domain.store_prefix_map import store_name_from_document_number
+
+        sale_date = sql_date_from_doc("d")
+        docs = self.db.fetch_df(
+            f"""
+            SELECT d._IDRRef AS doc_id, {sale_date} AS op_date,
+                   LTRIM(RTRIM(CAST(d._Number AS nvarchar(50)))) AS doc_number,
+                   CAST(d._Fld3569 AS float) AS header_amount
+            FROM dbo.{DOC_TRANSFER} AS d
+            WHERE d._Posted = 0x01
+              AND d._Date_Time >= %s AND d._Date_Time < %s
+            """,
+            params=(d0, d1),
+        )
+        if docs.empty:
+            return pd.DataFrame(
+                columns=["op_date", "store_name", "disposal_type", "document_count", "qty_candidate", "amount_candidate"]
+            )
+        docs["store_name"] = docs["doc_number"].map(store_name_from_document_number)
+        ids = [bytes(x) for x in docs["doc_id"].tolist()]
+        line_frames: list[pd.DataFrame] = []
+        batch = 400
+        for i in range(0, len(ids), batch):
+            chunk = ids[i : i + batch]
+            ph = ",".join(["%s"] * len(chunk))
+            line_frames.append(
+                self.db.fetch_df(
+                    f"""
+                    SELECT _Document144_IDRRef AS doc_id,
+                           SUM(CAST(_Fld3587 AS float)) AS qty_candidate,
+                           SUM(CAST(_Fld3592 AS float)) AS amount_candidate
+                    FROM dbo.{VT_TRANSFER}
+                    WHERE _Document144_IDRRef IN ({ph})
+                    GROUP BY _Document144_IDRRef
+                    """,
+                    params=tuple(chunk),
+                )
+            )
+        lines = pd.concat(line_frames, ignore_index=True) if line_frames else pd.DataFrame()
+        merged = docs.merge(lines, on="doc_id", how="left")
+        merged["qty_candidate"] = pd.to_numeric(merged.get("qty_candidate"), errors="coerce").fillna(0)
+        merged["amount_candidate"] = pd.to_numeric(merged.get("amount_candidate"), errors="coerce").fillna(
+            pd.to_numeric(merged["header_amount"], errors="coerce")
+        )
+        merged["disposal_type"] = "перемещение товаров (_Document144)"
+        return (
+            merged.groupby(["op_date", "store_name", "disposal_type"], as_index=False)
+            .agg(
+                document_count=("doc_id", "count"),
+                qty_candidate=("qty_candidate", "sum"),
+                amount_candidate=("amount_candidate", "sum"),
+            )
+            .sort_values(["op_date", "amount_candidate"], ascending=[True, False])
+        )
+
+    def load_supplier_returns_daily(self, f: InventoryFilters) -> pd.DataFrame:
+        """Возврат поставщику: _Document112 (+ ChngR1990 = регистрация изменений)."""
+        _validate(f)
+        d0 = to_1c_datetime(f.date_from)
+        d1 = to_1c_datetime(inclusive_date_to_exclusive(f.date_to))
+        from app.domain.retail_1c_dates import sql_date_from_doc
+        from app.domain.store_prefix_map import store_name_from_document_number
+
+        sale_date = sql_date_from_doc("d")
+        store_clause, store_params = "", []
+        if f.store_name:
+            prefixes = prefixes_for_store_name(f.store_name)
+            if prefixes:
+                parts, store_params = [], []
+                for p in prefixes:
+                    parts.append("LTRIM(RTRIM(CAST(d._Number AS nvarchar(50)))) LIKE %s")
+                    store_params.append(f"{p}%")
+                store_clause = f" AND ({' OR '.join(parts)})"
+
+        docs = self.db.fetch_df(
+            f"""
+            SELECT d._IDRRef AS doc_id, {sale_date} AS op_date,
+                   LTRIM(RTRIM(CAST(d._Number AS nvarchar(50)))) AS doc_number,
+                   CAST(d._Fld1964 AS float) AS header_amount
+            FROM dbo.{DOC_SUPPLIER_RETURN} AS d
+            WHERE d._Posted = 0x01
+              AND d._Date_Time >= %s AND d._Date_Time < %s
+              {store_clause}
+            """,
+            params=(d0, d1, *store_params),
+        )
+        if docs.empty:
+            return pd.DataFrame(
+                columns=["op_date", "store_name", "document_count", "qty", "amount_rub"]
+            )
+        docs["store_name"] = docs["doc_number"].map(store_name_from_document_number)
+        ids = [bytes(x) for x in docs["doc_id"].tolist()]
+        line_frames: list[pd.DataFrame] = []
+        batch = 400
+        for i in range(0, len(ids), batch):
+            chunk = ids[i : i + batch]
+            ph = ",".join(["%s"] * len(chunk))
+            line_frames.append(
+                self.db.fetch_df(
+                    f"""
+                    SELECT _Document112_IDRRef AS doc_id,
+                           SUM(CAST(_Fld1973 AS float)) AS qty,
+                           SUM(CAST(_Fld1977 AS float)) AS amount_rub
+                    FROM dbo.{VT_SUPPLIER_RETURN}
+                    WHERE _Document112_IDRRef IN ({ph})
+                    GROUP BY _Document112_IDRRef
+                    """,
+                    params=tuple(chunk),
+                )
+            )
+        lines = pd.concat(line_frames, ignore_index=True) if line_frames else pd.DataFrame()
+        merged = docs.merge(lines, on="doc_id", how="left")
+        merged["qty"] = pd.to_numeric(merged.get("qty"), errors="coerce").fillna(0)
+        merged["amount_rub"] = pd.to_numeric(merged.get("amount_rub"), errors="coerce").fillna(
+            pd.to_numeric(merged["header_amount"], errors="coerce")
+        )
+        return (
+            merged.groupby(["op_date", "store_name"], as_index=False)
+            .agg(document_count=("doc_id", "count"), qty=("qty", "sum"), amount_rub=("amount_rub", "sum"))
+            .sort_values(["op_date", "amount_rub"], ascending=[True, False])
+        )
 
     def load_nomenclature_top(
         self, f: InventoryFilters, doc_ids: list[bytes], limit: int = 100

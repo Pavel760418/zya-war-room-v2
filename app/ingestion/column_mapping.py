@@ -118,10 +118,19 @@ COLUMN_ALIASES_BY_SHEET: dict[str, tuple[ColumnAliasSpec, ...]] = {
             required=False,
             dtype="int",
         ),
+        ColumnAliasSpec("Дата", ("date", "день", "дата"), required=False, dtype="date"),
     ),
     "списания_неделя": (
         ColumnAliasSpec("Магазин", _STORE, required=True, dtype="str"),
+        ColumnAliasSpec("Дата", ("date", "день", "дата"), required=False, dtype="date"),
         ColumnAliasSpec("Неделя", ("week", "неделя"), required=False, dtype="str"),
+        ColumnAliasSpec(
+            "Статья списания",
+            ("writeoff_article", "статья", "статья списания тмц", "Статья_списания"),
+            required=False,
+            dtype="str",
+        ),
+        ColumnAliasSpec("Сумма", ("amount", "сумма", "сумма списания"), required=False),
         ColumnAliasSpec("ФРОФ", ("frof", "фроф", "ФРОВ"), required=False),
         ColumnAliasSpec("Пасскучи", ("паскуччи", "pasqucci", "Паскуччи"), required=False),
         ColumnAliasSpec("Производство", ("production", "произв-во", "производство"), required=False),
@@ -182,6 +191,7 @@ COLUMN_ALIASES_BY_SHEET: dict[str, tuple[ColumnAliasSpec, ...]] = {
     ),
     "потери_месяц": (
         ColumnAliasSpec("Магазин", _STORE, required=True, dtype="str"),
+        ColumnAliasSpec("Дата", ("date", "день", "дата"), required=False, dtype="date"),
         ColumnAliasSpec("Месяц", ("month", "месяц"), required=False, dtype="str"),
         ColumnAliasSpec("Вид потерь", ("loss_type", "вид_потери", "Вид_потерь", "тип потерь"), required=True, dtype="str"),
         ColumnAliasSpec("Сумма", ("amount", "сумма_потерь", "сумма", "потери"), required=True),

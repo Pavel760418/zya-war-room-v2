@@ -124,6 +124,8 @@ def load_analytics(
         cogs = inv.load_cogs_daily(invf)
         stock = inv.load_stock_by_warehouse(invf)
         writeoffs = inv.load_writeoffs_daily(invf)
+        inventories = inv.load_inventories_daily(invf)
+        supplier_returns = inv.load_supplier_returns_daily(invf)
         transfers = inv.load_transfers_daily(invf)
         price_types = sales.load_price_type_candidates(sf)
 
@@ -222,44 +224,74 @@ def load_analytics(
                     "cogs",
                     "Себестоимость",
                     status="requires_final_1c_reconciliation",
-                    warning="Требуется финальная сверка с 1С",
+                    warning="Нет движений _AccumRg6691 за период",
                 )
             )
-            metrics.append(_mv("gross_profit", "Валовая прибыль", status="requires_final_1c_reconciliation"))
-            metrics.append(_mv("gross_margin", "Валовая маржа", status="requires_final_1c_reconciliation"))
+            metrics.append(_mv("gross_profit", "Валовая прибыль (регистр)", status="no_confirmed_data"))
+            metrics.append(_mv("gross_margin", "Валовая маржа (регистр)", status="no_confirmed_data"))
+            metrics.append(
+                _mv(
+                    "gross_profit_vs_checks",
+                    "Валовая прибыль (чеки−COGS)",
+                    status="invalid_mix",
+                    warning="Не смешивать net_revenue чеков с COGS AccumRg",
+                )
+            )
         else:
             cogs_v = float(cogs["cogs"].sum())
-            net_v = next((m.value for m in metrics if m.code == "net_revenue" and m.value is not None), None)
+            reg_rev = float(cogs["revenue"].sum())
             metrics.append(
                 _mv(
                     "cogs",
                     "Себестоимость",
                     cogs_v,
                     "rub",
-                    status="requires_final_1c_reconciliation",
-                    warning="Требуется финальная сверка с 1С",
+                    status="ok_register_grain",
+                    warning=RetailInventoryRepository.COGS_WARNING,
                 )
             )
-            if net_v is not None:
-                gp = float(net_v) - cogs_v
-                metrics.append(
-                    _mv(
-                        "gross_profit",
-                        "Валовая прибыль",
-                        gp,
-                        "rub",
-                        status="requires_final_1c_reconciliation",
-                        warning="Требуется финальная сверка с 1С",
-                    )
+            metrics.append(
+                _mv(
+                    "register_revenue",
+                    "Выручка регистра AccumRg6691",
+                    reg_rev,
+                    "rub",
+                    status="ok_register_grain",
+                    warning="Не равна выручке чеков Document156",
                 )
+            )
+            gp_reg = reg_rev - cogs_v
+            metrics.append(
+                _mv(
+                    "gross_profit",
+                    "Валовая прибыль (регистр)",
+                    gp_reg,
+                    "rub",
+                    status="ok_register_grain",
+                    warning="Маржа только внутри AccumRg6691",
+                )
+            )
+            metrics.append(
+                _mv(
+                    "gross_margin",
+                    "Валовая маржа (регистр)",
+                    (gp_reg / reg_rev * 100) if reg_rev else None,
+                    "pct",
+                    status="ok_register_grain",
+                    warning="Маржа только внутри AccumRg6691",
+                )
+            )
+            net_v = next((m.value for m in metrics if m.code == "net_revenue" and m.value is not None), None)
+            if net_v is not None and float(net_v) > 0:
+                ratio = reg_rev / float(net_v)
                 metrics.append(
                     _mv(
-                        "gross_margin",
-                        "Валовая маржа",
-                        (gp / float(net_v) * 100) if net_v else None,
-                        "pct",
-                        status="requires_final_1c_reconciliation",
-                        warning="Требуется финальная сверка с 1С",
+                        "accum_vs_checks_ratio",
+                        "Отношение выручки AccumRg / чеки",
+                        ratio,
+                        "x",
+                        status="reconciled_mismatch",
+                        warning="Контроль: смешивать нельзя; ≈4.4× к продажам чеков / ≈44× к net_revenue (2026-08-10)",
                     )
                 )
 
@@ -288,8 +320,46 @@ def load_analytics(
                 )
             )
 
+        if inventories.empty:
+            metrics.append(_mv("inventories", "Инвентаризация", status="no_confirmed_data"))
+            metrics.append(_mv("inventory_adjustments", "Инвентаризационные корректировки", status="no_confirmed_data"))
+            metrics.append(_mv("shortages", "Недостачи", status="no_confirmed_data"))
+        else:
+            inv_amt = float(inventories["amount_rub"].sum())
+            metrics.append(
+                _mv(
+                    "inventories",
+                    "Инвентаризация",
+                    inv_amt,
+                    "rub",
+                    status="ok",
+                    warning="Каталог+бизнес: _Document124 Документ.Инвентаризация",
+                )
+            )
+            metrics.append(
+                _mv(
+                    "inventory_adjustments",
+                    "Инвентаризационные корректировки",
+                    inv_amt,
+                    "rub",
+                    status="ok",
+                    warning="_Document124 по знаку суммы",
+                )
+            )
+            short = inventories[inventories["disposal_type"].astype(str).str.contains("недостача", na=False)]
+            metrics.append(
+                _mv(
+                    "shortages",
+                    "Недостачи",
+                    float(short["amount_rub"].sum()) if not short.empty else 0.0,
+                    "rub",
+                    status="ok",
+                    warning="Инвентаризация: недостача (header<0)",
+                )
+            )
+
         if writeoffs.empty:
-            metrics.append(_mv("writeoffs", "Списания", status="requires_final_1c_reconciliation"))
+            metrics.append(_mv("writeoffs", "Списания", status="no_confirmed_data"))
         else:
             metrics.append(
                 _mv(
@@ -297,8 +367,8 @@ def load_analytics(
                     "Списания",
                     float(writeoffs["amount_rub"].sum()),
                     "rub",
-                    status="requires_final_1c_reconciliation",
-                    warning="Кандидат _Document124",
+                    status="ok",
+                    warning="Каталог: _Document172 Документ.СписаниеТоваров",
                 )
             )
             metrics.append(
@@ -307,33 +377,38 @@ def load_analytics(
                     "Количество списанного товара",
                     float(writeoffs["qty"].sum()),
                     "qty",
-                    status="requires_final_1c_reconciliation",
+                    status="ok",
                 )
             )
 
-        metrics.append(
-            _mv(
-                "shortages",
-                "Недостачи",
-                status="not_found",
-                warning="Метрика не найдена",
-            )
-        )
-        if transfers.empty:
-            metrics.append(_mv("transfers", "Перемещения", status="requires_final_1c_reconciliation"))
+        if supplier_returns.empty:
+            metrics.append(_mv("supplier_returns", "Возврат поставщику", status="no_confirmed_data"))
         else:
+            metrics.append(
+                _mv(
+                    "supplier_returns",
+                    "Возврат поставщику",
+                    float(supplier_returns["amount_rub"].sum()),
+                    "rub",
+                    status="ok",
+                    warning="Каталог: _Document112 Документ.ВозвратПоставщику",
+                )
+            )
+
+        if transfers.empty:
+            metrics.append(_mv("transfers", "Перемещения", status="no_confirmed_data"))
+        else:
+            amt = float(transfers["amount_candidate"].sum()) if "amount_candidate" in transfers.columns else None
             metrics.append(
                 _mv(
                     "transfers",
                     "Перемещения",
-                    float(transfers["document_count"].sum()),
-                    "docs",
-                    status="requires_final_1c_reconciliation",
-                    warning="Кандидат _Document122",
+                    amt if amt is not None else float(transfers["document_count"].sum()),
+                    "rub" if amt is not None else "docs",
+                    status="ok",
+                    warning="Каталог: _Document144 Документ.ПеремещениеТоваров",
                 )
             )
-        metrics.append(_mv("inventory_adjustments", "Инвентаризационные корректировки", status="not_found", warning="Метрика не найдена"))
-        metrics.append(_mv("supplier_returns", "Возврат поставщику", status="not_found", warning="Метрика не найдена"))
         metrics.append(_mv("products", "Номенклатура", status="ok", warning="Источник _Reference58 через строки чека"))
         metrics.append(_mv("last_update", "Последнее обновление", loaded_at, "ts"))
 
@@ -364,7 +439,9 @@ def load_analytics(
             "payments_by_category": _df(pay_cat),
             "cogs_daily": _df(cogs),
             "stock_by_warehouse": _df(stock),
+            "inventories_daily": _df(inventories),
             "writeoffs_daily": _df(writeoffs),
+            "supplier_returns_daily": _df(supplier_returns),
             "transfers_daily": _df(transfers),
             "unknown_store_prefixes": unknown,
             "payment_scope_label": "Оплаты по закрытиям смен",
