@@ -14,15 +14,24 @@ from typing import Any, Optional
 
 import pandas as pd
 
-DEFAULT_CACHE_DIR = Path(os.environ.get("WARROOM_CACHE_DIR", "/home/andr/apps/zya-war-room-v2/var/cache"))
+def default_cache_dir() -> Path:
+    """Каталог кэша: env, иначе ``<repo>/var/cache`` (не абсолютный /home/andr — ломает Streamlit Cloud)."""
+    env = (os.environ.get("WARROOM_CACHE_DIR") or "").strip()
+    if env:
+        return Path(env)
+    return Path(__file__).resolve().parents[2] / "var" / "cache"
+
+
+DEFAULT_CACHE_DIR = default_cache_dir()
 CACHE_DB_NAME = "warroom_raw.sqlite"
 META_TABLE = "_sync_meta"
 KV_TABLE = "_raw_kv"
 
 
-def cache_db_path(cache_dir: Optional[Path] = None) -> Path:
-    d = Path(cache_dir) if cache_dir else DEFAULT_CACHE_DIR
-    d.mkdir(parents=True, exist_ok=True)
+def cache_db_path(cache_dir: Optional[Path] = None, *, create: bool = False) -> Path:
+    d = Path(cache_dir) if cache_dir else default_cache_dir()
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d / CACHE_DB_NAME
 
 
@@ -34,10 +43,14 @@ class LocalCacheStore:
     """Чтение/запись raw-слоя SqlDataService в SQLite."""
 
     def __init__(self, path: Optional[Path] = None):
-        self.path = Path(path) if path else cache_db_path()
+        # Не создаём каталог при чтении — на Cloud mkdir('/home/andr/...') даёт Errno 13.
+        self.path = Path(path) if path else cache_db_path(create=False)
 
     def exists(self) -> bool:
-        return self.path.is_file() and self.path.stat().st_size > 0
+        try:
+            return self.path.is_file() and self.path.stat().st_size > 0
+        except OSError:
+            return False
 
     def last_success_at(self) -> Optional[str]:
         if not self.exists():

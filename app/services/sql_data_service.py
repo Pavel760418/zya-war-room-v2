@@ -37,6 +37,28 @@ class SqlLoadResult:
     confidence_notes: list[str] = field(default_factory=list)
 
 
+def _resolve_source_mode() -> str:
+    """LAN office: ``WARROOM_DATA_SOURCE=cache``. Streamlit Cloud: sql/gateway (нет /home/andr)."""
+    raw = (os.environ.get("WARROOM_DATA_SOURCE") or "").strip().lower()
+    if raw:
+        return raw
+    try:
+        from app.core.settings import _secret_get
+
+        raw = (_secret_get("WARROOM_DATA_SOURCE") or _secret_get("DATA_SOURCE_MODE") or "").strip().lower()
+    except Exception:  # noqa: BLE001
+        raw = ""
+    if raw:
+        return raw
+    try:
+        if LocalCacheStore().exists():
+            return "cache"
+    except OSError:
+        pass
+    # Cloud / хост без кэша: live SQL или публичный gateway (_cloud_bridge).
+    return "sql"
+
+
 class SqlDataService:
     def __init__(self, db: Optional[SqlDatabase] = None, *, use_env_db: bool = True):
         settings = get_app_settings()
@@ -47,7 +69,7 @@ class SqlDataService:
             self.db = SqlDatabase.from_env(connect_timeout=timeout)
         else:
             self.db = None
-        self._source_mode = (os.environ.get("WARROOM_DATA_SOURCE") or "cache").strip().lower()
+        self._source_mode = _resolve_source_mode()
 
     @property
     def uses_live_sql(self) -> bool:
@@ -56,16 +78,34 @@ class SqlDataService:
     def load(self) -> SqlLoadResult:
         # Пользовательский режим: только локальный кэш (без обращений к 1С).
         if not self.uses_live_sql:
-            cached = self._load_from_local_cache()
+            try:
+                cached = self._load_from_local_cache()
+            except OSError as exc:
+                # Streamlit Cloud: старый абсолютный путь /home/andr → Permission denied
+                if get_gateway_settings() is not None or self.db is not None:
+                    return self._load_live()
+                return SqlLoadResult(
+                    raw=self.empty_raw(),
+                    status=SqlStatus(
+                        ok=False,
+                        message="Кэш недоступен на этой машине. Задайте WARROOM_GATEWAY_* или DATABASE_URL.",
+                        server="local_cache",
+                        engine="sqlite",
+                        error=redact_error(exc),
+                    ),
+                    warnings=["cache_os_error"],
+                    mapping_complete=False,
+                    last_success_at=None,
+                )
             if cached is not None:
                 return cached
-            # Без кэша и без live-fallback — явная ошибка (не трогаем продуктивную 1С).
+            # Без кэша: на Cloud есть gateway — не блокируем UI.
             allow_fallback = (os.environ.get("WARROOM_ALLOW_LIVE_FALLBACK") or "").strip().lower() in {
                 "1",
                 "true",
                 "yes",
             }
-            if allow_fallback:
+            if allow_fallback or get_gateway_settings() is not None:
                 return self._load_live()
             store = LocalCacheStore()
             return SqlLoadResult(
@@ -235,17 +275,21 @@ class SqlDataService:
 
     def status(self) -> SqlStatus:
         if not self.uses_live_sql:
-            store = LocalCacheStore()
-            synced = store.last_success_at()
-            if store.exists() and synced:
-                return SqlStatus(
-                    ok=True,
-                    message=f"Локальный кэш актуален (снимок 1С: {synced})",
-                    server="local_cache",
-                    database=str(store.path),
-                    engine="sqlite",
-                    last_success_at=synced,
-                )
+            try:
+                store = LocalCacheStore()
+                synced = store.last_success_at()
+                if store.exists() and synced:
+                    return SqlStatus(
+                        ok=True,
+                        message=f"Локальный кэш актуален (снимок 1С: {synced})",
+                        server="local_cache",
+                        database=str(store.path),
+                        engine="sqlite",
+                        last_success_at=synced,
+                    )
+            except OSError:
+                # Fall through to gateway / MSSQL status on Cloud.
+                pass
         if self.db is None:
             gw = get_gateway_settings()
             if gw is not None:
