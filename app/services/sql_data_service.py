@@ -38,10 +38,16 @@ class SqlLoadResult:
 
 
 def _resolve_source_mode() -> str:
-    """LAN office: ``WARROOM_DATA_SOURCE=cache``. Streamlit Cloud: sql/gateway (нет /home/andr)."""
+    """LAN: ``WARROOM_DATA_SOURCE=cache`` из systemd. Cloud: sqlite snapshot в data/cloud_snapshot."""
     raw = (os.environ.get("WARROOM_DATA_SOURCE") or "").strip().lower()
     if raw:
         return raw
+    # Snapshot / local sqlite wins over Streamlit secrets that still point at broken public :3000.
+    try:
+        if LocalCacheStore().exists():
+            return "cache"
+    except OSError:
+        pass
     try:
         from app.core.settings import _secret_get
 
@@ -50,12 +56,6 @@ def _resolve_source_mode() -> str:
         raw = ""
     if raw:
         return raw
-    try:
-        if LocalCacheStore().exists():
-            return "cache"
-    except OSError:
-        pass
-    # Cloud / хост без кэша: live SQL или публичный gateway (_cloud_bridge).
     return "sql"
 
 

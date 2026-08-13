@@ -1,6 +1,6 @@
-# Auto-generated LAN edge bridge defaults for Streamlit Cloud.
-# Keep repository private. Override via st.secrets / env.
-# NOTE: public http://81.163.35.181:3000/warroom-api hits Metabase (HTML), not this gateway.
-# Temporary HTTPS tunnel → local warroom-sql-gateway :8520
-GATEWAY_URL = "https://06f5e6ef5aca9a.lhr.life"
+# Auto-generated defaults for Streamlit Cloud.
+# Public http://81.163.35.181:3000/warroom-api currently returns Metabase HTML, not JSON.
+# Cloud UI reads data/cloud_snapshot/warroom_raw.sqlite (see LocalCacheStore).
+# Gateway fields kept for optional live mode after NAT is fixed.
+GATEWAY_URL = "http://81.163.35.181:3000/warroom-api"
 GATEWAY_TOKEN = "0CphT1QN7GZDdgowzwwUyZ55vhFcp_K9VUvnCropvak"

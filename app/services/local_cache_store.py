@@ -14,18 +14,21 @@ from typing import Any, Optional
 
 import pandas as pd
 
-def default_cache_dir() -> Path:
-    """Каталог кэша: env, иначе ``<repo>/var/cache`` (не абсолютный /home/andr — ломает Streamlit Cloud)."""
-    env = (os.environ.get("WARROOM_CACHE_DIR") or "").strip()
-    if env:
-        return Path(env)
-    return Path(__file__).resolve().parents[2] / "var" / "cache"
-
-
-DEFAULT_CACHE_DIR = default_cache_dir()
 CACHE_DB_NAME = "warroom_raw.sqlite"
 META_TABLE = "_sync_meta"
 KV_TABLE = "_raw_kv"
+
+
+def default_cache_dir() -> Path:
+    """Каталог кэша: env → ``data/cloud_snapshot`` (Cloud) → ``var/cache`` (LAN)."""
+    env = (os.environ.get("WARROOM_CACHE_DIR") or "").strip()
+    if env:
+        return Path(env)
+    repo = Path(__file__).resolve().parents[2]
+    snapshot = repo / "data" / "cloud_snapshot"
+    if (snapshot / CACHE_DB_NAME).is_file():
+        return snapshot
+    return repo / "var" / "cache"
 
 
 def cache_db_path(cache_dir: Optional[Path] = None, *, create: bool = False) -> Path:
@@ -33,6 +36,9 @@ def cache_db_path(cache_dir: Optional[Path] = None, *, create: bool = False) -> 
     if create:
         d.mkdir(parents=True, exist_ok=True)
     return d / CACHE_DB_NAME
+
+
+DEFAULT_CACHE_DIR = default_cache_dir()
 
 
 def _utcnow() -> str:
