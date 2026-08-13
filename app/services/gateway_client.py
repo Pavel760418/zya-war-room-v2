@@ -50,6 +50,8 @@ def fetch_gateway_raw(settings: GatewaySettings):
                     "X-WarRoom-Token": settings.token,
                     "Accept": "application/json",
                     "Accept-Encoding": "gzip",
+                    "User-Agent": "warroom-gateway-client/1.0",
+                    "X-Pinggy-No-Screen": "1",
                 },
                 method="GET",
             )
@@ -113,6 +115,21 @@ def fetch_gateway_raw(settings: GatewaySettings):
 
 def fetch_gateway_health(settings: GatewaySettings) -> dict[str, Any]:
     url = settings.base_url.rstrip("/") + "/health"
-    req = Request(url, method="GET")
+    req = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "warroom-gateway-client/1.0",
+            "X-Pinggy-No-Screen": "1",
+        },
+        method="GET",
+    )
     with urlopen(req, timeout=min(30, settings.timeout_sec)) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+        raw = resp.read()
+        text = raw.decode("utf-8", errors="replace").strip()
+        if not text or text[:1] not in "{[":
+            raise ValueError(
+                "gateway returned non-JSON "
+                f"(content-type={resp.headers.get('Content-Type')!r}, head={text[:80]!r})"
+            )
+        return json.loads(text)
